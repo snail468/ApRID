@@ -57,6 +57,13 @@ function nodeToUri(n) {
       if (r.congestion) q.set('congestion_control', r.congestion);
       return `tuic://${r.uuid}:${r.password}@${n.server}:${n.port}?${q}#${enc(n.name)}`;
     }
+    case 'anytls': {
+      const q = new URLSearchParams();
+      if (r.sni) q.set('sni', r.sni);
+      if (r.insecure) q.set('insecure', '1');
+      if (r.fp) q.set('fp', r.fp);
+      return `anytls://${encodeURIComponent(r.password || '')}@${n.server}:${n.port}?${q}#${enc(n.name)}`;
+    }
     default:
       return '';
   }
@@ -105,6 +112,13 @@ function nodeToClash(n) {
     }
     case 'tuic':
       return { ...base, type: 'tuic', uuid: r.uuid, password: r.password, sni: r.sni || '', alpn: [r.alpn || 'h3'] };
+    case 'anytls': {
+      const p = { ...base, type: 'anytls', password: r.password };
+      if (r.sni) p.sni = r.sni;
+      if (r.insecure) p['skip-cert-verify'] = true;
+      if (r.fp) p['client-fingerprint'] = r.fp;
+      return p;
+    }
     default:
       return null;
   }
@@ -175,6 +189,9 @@ function nodeToSingbox(n) {
     case 'tuic':
       return { type: 'tuic', tag, server: n.server, server_port: n.port, uuid: r.uuid, password: r.password,
         tls: { enabled: true, server_name: r.sni || n.server, alpn: [r.alpn || 'h3'] } };
+    case 'anytls':
+      return { type: 'anytls', tag, server: n.server, server_port: n.port, password: r.password,
+        tls: { enabled: true, server_name: r.sni || n.server, insecure: !!r.insecure } };
     default:
       return null;
   }

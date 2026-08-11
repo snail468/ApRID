@@ -15,6 +15,8 @@ import templateRoutes from './routes/templates.js';
 import taskRoutes from './routes/tasks.js';
 import statsRoutes from './routes/stats.js';
 import subRoutes from './routes/sub.js';
+import groupRoutes from './routes/groups.js';
+import automationRoutes from './routes/automation.js';
 
 seedAdmin();
 seedTemplates();
@@ -41,6 +43,8 @@ app.use('/api/users', userRoutes);
 app.use('/api/templates', templateRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/stats', statsRoutes);
+app.use('/api/groups', groupRoutes);
+app.use('/api/automation', automationRoutes);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'API not found' }));
 

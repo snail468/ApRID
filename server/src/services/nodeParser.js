@@ -152,6 +152,26 @@ function parseTuic(uri) {
   };
 }
 
+function parseAnytls(uri) {
+  // anytls://password@host:port?sni=...&insecure=1#name
+  const u = safeUrl(uri);
+  if (!u) return null;
+  const q = u.searchParams;
+  return {
+    name: decodeURIComponent(u.hash.slice(1)) || `${u.hostname}:${u.port}`,
+    type: 'anytls',
+    server: u.hostname,
+    port: parseInt(u.port || '443', 10),
+    uri,
+    raw: {
+      password: decodeURIComponent(u.password || u.username || ''),
+      sni: q.get('sni') || q.get('peer') || '',
+      insecure: q.get('insecure') === '1' || q.get('allowInsecure') === '1',
+      fp: q.get('fp') || '',
+    },
+  };
+}
+
 export function parseUri(uri) {
   uri = uri.trim();
   if (uri.startsWith('vmess://')) return parseVmess(uri);
@@ -160,6 +180,7 @@ export function parseUri(uri) {
   if (uri.startsWith('ss://')) return parseSS(uri);
   if (uri.startsWith('hysteria2://') || uri.startsWith('hy2://')) return parseHy2(uri);
   if (uri.startsWith('tuic://')) return parseTuic(uri);
+  if (uri.startsWith('anytls://')) return parseAnytls(uri);
   return null;
 }
 
@@ -188,6 +209,11 @@ function fromClashProxy(p) {
       return { ...base, type: 'hysteria2', raw: { password: p.password, sni: p.sni || '' }};
     case 'tuic':
       return { ...base, type: 'tuic', raw: { uuid: p.uuid, password: p.password, sni: p.sni || '' }};
+    case 'anytls':
+      return { ...base, type: 'anytls', raw: {
+        password: p.password, sni: p.sni || p.servername || '',
+        insecure: !!p['skip-cert-verify'], fp: p['client-fingerprint'] || '',
+      }};
     default:
       return null;
   }

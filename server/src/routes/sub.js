@@ -31,8 +31,9 @@ router.get('/:token', (req, res) => {
 
   // traffic/expiry line for client display
   if (status === 'active' || status === 'expiring') {
-    const total = 1099511627776; // 1TB placeholder for aggregated panel
-    const used = 0;
+    const limit = Number(user.traffic_limit || 0);
+    const used = Number(user.traffic_used || 0);
+    const total = limit > 0 ? limit : 1099511627776; // real cap or 1TB placeholder
     const expire = user.expire_at ? Math.floor(user.expire_at / 1000) : 0;
     res.setHeader('Subscription-Userinfo',
       `upload=0; download=${used}; total=${total}; expire=${expire}`);

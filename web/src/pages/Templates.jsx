@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
 import { API } from '../api.js';
 import { Modal, useConfirm } from '../ui.jsx';
+import { useCachedResource, invalidate } from '../store.js';
 
 const CLIENT_TYPES = [
   { v: 'clash', l: 'Clash.Meta' }, { v: 'singbox', l: 'sing-box' }, { v: 'base64', l: '通用 Base64' },
@@ -8,16 +9,11 @@ const CLIENT_TYPES = [
 ];
 
 export default function Templates({ toast }) {
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { data: rows = [], loading, refresh } = useCachedResource('templates', () => API.templates());
   const [editing, setEditing] = useState(null);
   const [confirm, confirmNode] = useConfirm();
 
-  const load = useCallback(() => {
-    setLoading(true);
-    API.templates().then(setRows).catch((e) => toast.error(e.message)).finally(() => setLoading(false));
-  }, [toast]);
-  useEffect(load, [load]);
+  const load = () => { invalidate('templates'); refresh(); };
 
   const del = async (id) => { if (await confirm('删除该模板？')) { await API.deleteTemplate(id); load(); } };
 
@@ -31,7 +27,7 @@ export default function Templates({ toast }) {
         用户按客户端类型拉取订阅时套用对应模板。模板中用 <code className="mono">&lt;PROXIES&gt;</code> 占位符标记节点插入位置（Clash/sing-box 也可自动注入 proxies）。
       </p>
 
-      {loading ? <div className="empty"><span className="spin" /></div>
+      {loading && rows.length === 0 ? <div className="empty"><span className="spin" /></div>
         : rows.length === 0 ? <div className="empty">暂无模板。</div>
         : (
           <div className="table-wrap">

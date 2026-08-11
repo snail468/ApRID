@@ -8,7 +8,7 @@ const router = express.Router();
 router.use(requireAuth);
 
 const FIELDS = ['name', 'url', 'account', 'password', 'sub_url', 'panel_type',
-  'request_headers', 'proxy', 'group_name', 'remark', 'node_filter',
+  'request_headers', 'user_agent', 'cookie', 'proxy', 'group_name', 'remark', 'node_filter',
   'expire_at', 'used_traffic', 'total_traffic'];
 
 function normalize(body) {
@@ -73,6 +73,16 @@ router.post('/batch/delete', (req, res) => {
   const tx = db.transaction((list) => list.forEach((id) => del.run(id)));
   tx(ids);
   res.json({ ok: true, deleted: ids.length });
+});
+
+// batch set group
+router.post('/batch/group', (req, res) => {
+  const { ids = [], group_name = null } = req.body || {};
+  const g = group_name ? String(group_name).trim() || null : null;
+  const upd = db.prepare('UPDATE airports SET group_name = ?, updated_at = ? WHERE id = ?');
+  const now = Date.now();
+  db.transaction((list) => list.forEach((id) => upd.run(g, now, id)))(ids);
+  res.json({ ok: true });
 });
 
 // fetch/pull subscription now

@@ -1,16 +1,12 @@
-import { useState, useEffect } from 'react';
 import { API } from '../api.js';
 import { fmtDate } from '../ui.jsx';
+import { useCachedResource } from '../store.js';
 
 export default function Dashboard() {
-  const [stats, setStats] = useState(null);
-  const [err, setErr] = useState('');
+  const { data: stats, loading, error } = useCachedResource('stats', () => API.stats());
 
-  useEffect(() => {
-    API.stats().then(setStats).catch((e) => setErr(e.message));
-  }, []);
-
-  if (err) return <div className="empty">加载失败：{err}</div>;
+  if (error && !stats) return <div className="empty">加载失败：{error.message}</div>;
+  if (loading && !stats) return <div className="empty"><span className="spin" /></div>;
   if (!stats) return <div className="empty"><span className="spin" /></div>;
 
   const s = stats.userStatus || {};
@@ -54,7 +50,7 @@ function Stat({ n, l, color }) {
   return <div className="stat"><div className="n" style={{ color }}>{n}</div><div className="l">{l}</div></div>;
 }
 function taskLabel(t) {
-  return { airport_reset: '机场订阅重置', node_fetch: '节点拉取', latency: '延迟检测' }[t] || t;
+  return { airport_reset: '机场订阅重置', traffic_stats: '用户流量统计', node_fetch: '节点拉取', latency: '延迟检测' }[t] || t;
 }
 function statusColor(s) {
   return { success: 'green', failed: 'red', running: 'blue', pending: 'gray' }[s] || 'gray';

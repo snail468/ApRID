@@ -1,4 +1,7 @@
 import { ProxyAgent } from 'undici';
+import { detectChallenge, ANTIBOT_HINT } from './antibot.js';
+
+const UA = (ap) => ap.user_agent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
 // Airport subscription-reset adapters.
 //
@@ -24,7 +27,8 @@ function origin(url) {
 async function v2boardReset(ap) {
   const base = origin(ap.url);
   const dispatcher = agent(ap.proxy);
-  const common = { 'Content-Type': 'application/json', 'User-Agent': 'ApRID/1.0' };
+  const common = { 'Content-Type': 'application/json', 'User-Agent': UA(ap) };
+  if (ap.cookie) common.Cookie = ap.cookie;
 
   // 1. login -> auth_data token
   const loginRes = await fetch(`${base}/api/v1/passport/auth/login`, {
@@ -33,10 +37,15 @@ async function v2boardReset(ap) {
     dispatcher,
     body: JSON.stringify({ email: ap.account, password: ap.password }),
   });
-  const login = await loginRes.json().catch(() => ({}));
+  const loginText = await loginRes.text();
+  const challenge = detectChallenge(loginRes.status, loginText, loginRes.headers);
+  if (challenge) throw new Error(`${challenge}。${ANTIBOT_HINT}`);
+  let login = {};
+  try { login = JSON.parse(loginText); } catch { /* noop */ }
   const authData = login?.data?.auth_data || login?.data?.token;
   if (!authData) throw new Error('登录失败：账号或密码错误（V2Board）');
   const authHeaders = { ...common, Authorization: authData };
+  delete authHeaders['Content-Type'];
 
   // 2. reset subscribe url
   const resetRes = await fetch(`${base}/api/v1/user/resetSecurity`, {
@@ -73,25 +82,33 @@ async function sspanelReset(ap) {
     if (parsed) cookie = cookie ? `${cookie}; ${parsed}` : parsed;
   };
 
+  if (ap.cookie) cookie = ap.cookie;
+
   // 1. form login
   const form = new URLSearchParams({ email: ap.account, passwd: ap.password, remember_me: 'on' });
+  const loginHeaders = {
+    'Content-Type': 'application/x-www-form-urlencoded',
+    'User-Agent': UA(ap),
+  };
+  if (ap.cookie) loginHeaders.Cookie = ap.cookie;
   const loginRes = await fetch(`${base}/auth/login`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'User-Agent': 'ApRID/1.0',
-    },
+    headers: loginHeaders,
     dispatcher,
     body: form.toString(),
     redirect: 'manual',
   });
   captureCookie(loginRes);
-  const loginJson = await loginRes.json().catch(() => ({}));
+  const loginText = await loginRes.text();
+  const challenge = detectChallenge(loginRes.status, loginText, loginRes.headers);
+  if (challenge) throw new Error(`${challenge}。${ANTIBOT_HINT}`);
+  let loginJson = {};
+  try { loginJson = JSON.parse(loginText); } catch { /* html response */ }
   if (loginJson.ret !== undefined && loginJson.ret !== 1 && !cookie) {
     throw new Error(`登录失败：${loginJson.msg || '账号或密码错误'}（SSPanel）`);
   }
 
-  const authHeaders = { 'User-Agent': 'ApRID/1.0', Cookie: cookie };
+  const authHeaders = { 'User-Agent': UA(ap), Cookie: cookie };
 
   // 2. reset subscription token
   const resetRes = await fetch(`${base}/user/reset_URL`, {

@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
 import { API } from '../api.js';
 import { Modal, useConfirm, copyText, fmtBytes, fmtDate, daysLeft, toDatetimeLocal, fromDatetimeLocal } from '../ui.jsx';
 import { useTable, SortTh } from '../hooks/useTable.jsx';
+import { useCachedResource, invalidate } from '../store.js';
+import { GroupSelect, GroupManagerModal, UAField, HeadersEditor, ProxyBuilder, NodeProcessingEditor } from '../components.jsx';
 
 const PANEL_TYPES = [
   { v: 'generic', l: '通用 (自动识别)' },
@@ -11,63 +13,61 @@ const PANEL_TYPES = [
   { v: 'manual', l: '手动 (仅订阅链接)' },
 ];
 
+function safeParse(s) { try { return JSON.parse(s || '{}'); } catch { return {}; } }
+
 export default function Airports({ toast }) {
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState(null); // airport or {} for new
+  const { data: rows = [], loading, refresh } = useCachedResource('airports', () => API.airports());
+  const { data: groups = [], refresh: refreshGroups } = useCachedResource('groups:airport', () => API.groups('airport'));
+  const [editing, setEditing] = useState(null);
   const [busy, setBusy] = useState({});
+  const [showGroups, setShowGroups] = useState(false);
+  const [batchGroup, setBatchGroup] = useState('');
   const [confirm, confirmNode] = useConfirm();
 
-  const load = useCallback(() => {
-    setLoading(true);
-    API.airports().then(setRows).catch((e) => toast.error(e.message)).finally(() => setLoading(false));
-  }, [toast]);
-  useEffect(load, [load]);
-
+  const load = () => refresh();
   const t = useTable(rows, { searchKeys: ['name', 'url', 'account', 'group_name', 'remark'], initialSort: { key: 'id', dir: 'desc' } });
-
   const setRowBusy = (id, v) => setBusy((b) => ({ ...b, [id]: v }));
 
   const doFetch = async (id) => {
     setRowBusy(id, 'fetch');
-    try { const r = await API.fetchAirport(id); toast.success(`拉取成功，${r.count} 个节点`); load(); }
+    try { const r = await API.fetchAirport(id); toast.success(`拉取成功，${r.count} 个节点`); invalidate('nodes:'); load(); }
     catch (e) { toast.error(e.message); }
     finally { setRowBusy(id, null); }
   };
   const doReset = async (id) => {
-    if (!(await confirm('将自动登录机场重置订阅并回填，确认执行？'))) return;
+    if (!(await confirm('将自动登录机场重置订阅并回填，确认执行？进度见「自动化」页。'))) return;
     setRowBusy(id, 'reset');
-    try { const r = await API.resetAirport(id); toast.success(`重置成功，新增 ${r.count} 节点`); load(); }
+    try { const r = await API.resetAirport(id); toast.success(`重置成功，新增 ${r.count} 节点`); invalidate('nodes:'); load(); }
     catch (e) { toast.error(e.message); }
     finally { setRowBusy(id, null); }
   };
   const doDelete = async (id) => {
     if (!(await confirm('确认删除该机场？其节点也会被删除。'))) return;
-    await API.deleteAirport(id); toast.success('已删除'); load();
+    await API.deleteAirport(id); toast.success('已删除'); invalidate('nodes:'); load();
   };
   const batchDelete = async () => {
     if (!(await confirm(`确认删除选中的 ${t.selected.size} 个机场？`))) return;
-    await API.batchDeleteAirports([...t.selected]); t.clearSelection(); toast.success('已批量删除'); load();
+    await API.batchDeleteAirports([...t.selected]); t.clearSelection(); toast.success('已批量删除'); invalidate('nodes:'); load();
   };
   const batchFetch = async () => {
     toast.info('开始批量拉取…');
-    await API.batchFetchAirports([...t.selected]); t.clearSelection(); toast.success('批量拉取完成'); load();
+    await API.batchFetchAirports([...t.selected]); t.clearSelection(); toast.success('批量拉取完成'); invalidate('nodes:'); load();
   };
-
-  const groups = [...new Set(rows.map((r) => r.group_name).filter(Boolean))];
-
   return (
     <>
       <div className="page-head">
         <h1>机场管理</h1>
-        <button className="btn primary" onClick={() => setEditing({})}>+ 新增机场</button>
+        <div className="btn-row">
+          <button className="btn" onClick={() => setShowGroups(true)}>分组管理</button>
+          <button className="btn primary" onClick={() => setEditing({})}>+ 新增机场</button>
+        </div>
       </div>
 
       <div className="toolbar">
         <input className="search" placeholder="搜索名称/网址/账户/备注" value={t.query} onChange={(e) => t.setQuery(e.target.value)} />
         <select style={{ width: 140 }} value={t.filters.group_name || ''} onChange={(e) => t.setFilters((f) => ({ ...f, group_name: e.target.value }))}>
           <option value="">全部分组</option>
-          {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+          {groups.map((g) => <option key={g.id} value={g.name}>{g.name}</option>)}
         </select>
         <select style={{ width: 150 }} value={t.filters.panel_type || ''} onChange={(e) => t.setFilters((f) => ({ ...f, panel_type: e.target.value }))}>
           <option value="">全部面板类型</option>
@@ -77,13 +77,19 @@ export default function Airports({ toast }) {
         {t.selected.size > 0 && (
           <>
             <span className="muted small">已选 {t.selected.size}</span>
+            <select style={{ width: 130 }} value={batchGroup} onChange={(e) => setBatchGroup(e.target.value)}>
+              <option value="">设为分组…</option>
+              <option value="__none__">无分组</option>
+              {groups.map((g) => <option key={g.id} value={g.name}>{g.name}</option>)}
+            </select>
+            <button className="btn sm" disabled={!batchGroup} onClick={() => { const v = batchGroup === '__none__' ? '' : batchGroup; API.batchGroupAirports([...t.selected], v || null).then(() => { t.clearSelection(); setBatchGroup(''); toast.success('已设置分组'); load(); }); }}>应用</button>
             <button className="btn sm" onClick={batchFetch}>批量拉取</button>
             <button className="btn sm danger" onClick={batchDelete}>批量删除</button>
           </>
         )}
       </div>
 
-      {loading ? <div className="empty"><span className="spin" /></div>
+      {loading && rows.length === 0 ? <div className="empty"><span className="spin" /></div>
         : rows.length === 0 ? <div className="empty">还没有机场，点击右上角新增。</div>
         : (
           <div className="table-wrap">
@@ -151,7 +157,8 @@ export default function Airports({ toast }) {
         ))}
       </div>
 
-      {editing && <AirportModal airport={editing} toast={toast} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
+      {editing && <AirportModal airport={editing} groups={groups} toast={toast} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); refreshGroups(); }} />}
+      {showGroups && <GroupManagerModal kind="airport" title="机场分组管理" toast={toast} onClose={() => setShowGroups(false)} onChanged={() => { refreshGroups(); load(); }} />}
       {confirmNode}
     </>
   );
@@ -164,7 +171,6 @@ function expireCell(ms) {
   return <span className={`badge ${cls}`}>{fmtDate(ms)}{d >= 0 ? ` (${d}天)` : ' 已过期'}</span>;
 }
 
-// 到期用量信息：已用 / 总量 进度条 + 剩余
 function UsageCell({ used, total }) {
   if (used == null && total == null) return <span className="muted">-</span>;
   const u = Number(used || 0);
@@ -183,15 +189,16 @@ function UsageCell({ used, total }) {
   );
 }
 
-function AirportModal({ airport, toast, onClose, onSaved }) {
+function AirportModal({ airport, groups, toast, onClose, onSaved }) {
   const isNew = !airport.id;
   const [f, setF] = useState({
     name: airport.name || '', url: airport.url || '', account: airport.account || '',
     password: airport.password || '', sub_url: airport.sub_url || '',
     panel_type: airport.panel_type || 'sspanel', group_name: airport.group_name || '',
     remark: airport.remark || '', proxy: airport.proxy || '',
-    request_headers: airport.request_headers || '{}',
-    node_filter: airport.node_filter || '{}',
+    user_agent: airport.user_agent || '', cookie: airport.cookie || '',
+    request_headers: safeParse(airport.request_headers),
+    node_filter: safeParse(airport.node_filter),
     expire_at: toDatetimeLocal(airport.expire_at),
   });
   const [saving, setSaving] = useState(false);
@@ -199,12 +206,13 @@ function AirportModal({ airport, toast, onClose, onSaved }) {
 
   const save = async () => {
     if (!f.name.trim()) return toast.error('机场名称必填');
-    // validate JSON fields
-    for (const k of ['request_headers', 'node_filter']) {
-      try { JSON.parse(f[k] || '{}'); } catch { return toast.error(`${k} 不是合法 JSON`); }
-    }
     setSaving(true);
-    const body = { ...f, expire_at: fromDatetimeLocal(f.expire_at) };
+    const body = {
+      ...f,
+      request_headers: JSON.stringify(f.request_headers || {}),
+      node_filter: JSON.stringify(f.node_filter || {}),
+      expire_at: fromDatetimeLocal(f.expire_at),
+    };
     try {
       if (isNew) await API.createAirport(body);
       else await API.updateAirport(airport.id, body);
@@ -234,17 +242,23 @@ function AirportModal({ airport, toast, onClose, onSaved }) {
       </div>
       <div className="field"><label>订阅链接</label><input value={f.sub_url} onChange={(e) => set('sub_url', e.target.value)} placeholder="https://example.com/link/xxxx" /></div>
       <div className="field-row">
-        <div className="field"><label>分组</label><input value={f.group_name} onChange={(e) => set('group_name', e.target.value)} /></div>
+        <div className="field"><label>分组</label><GroupSelect value={f.group_name} groups={groups} onChange={(v) => set('group_name', v)} /></div>
         <div className="field"><label>账户到期</label><input type="datetime-local" value={f.expire_at} onChange={(e) => set('expire_at', e.target.value)} /></div>
       </div>
-      <div className="field"><label>拉取代理（可选，http/socks5://…）</label><input value={f.proxy} onChange={(e) => set('proxy', e.target.value)} /></div>
-      <div className="field"><label>请求头 (JSON)</label><textarea value={f.request_headers} onChange={(e) => set('request_headers', e.target.value)} placeholder='{"User-Agent":"clash"}' /></div>
+
+      <div className="section-label">拉取设置</div>
+      <div className="field"><label>User-Agent（订阅拉取标识）</label><UAField value={f.user_agent} onChange={(v) => set('user_agent', v)} /></div>
+      <div className="field"><label>拉取代理</label><ProxyBuilder value={f.proxy} onChange={(v) => set('proxy', v)} /></div>
+      <div className="field"><label>请求头</label><HeadersEditor value={f.request_headers} onChange={(v) => set('request_headers', v)} /></div>
       <div className="field">
-        <label>节点处理 (JSON)：include/exclude 正则、protocols 数组、prefix 前缀、rename 规则、globalPrefix 跨机场唯一前缀</label>
-        <textarea value={f.node_filter} onChange={(e) => set('node_filter', e.target.value)}
-          placeholder='{"exclude":"官网|流量|过期","prefix":"🇭🇰","protocols":["vmess","trojan"],"rename":[{"from":"HK","to":"香港"}],"globalPrefix":"A-"}' />
+        <label>Cookie（可选，用于绕过人机验证/防护）</label>
+        <input value={f.cookie} onChange={(e) => set('cookie', e.target.value)} placeholder="在浏览器通过验证后从开发者工具复制粘贴" />
       </div>
-      <div className="field"><label>备注</label><input value={f.remark} onChange={(e) => set('remark', e.target.value)} /></div>
+
+      <div className="section-label">节点处理</div>
+      <NodeProcessingEditor value={f.node_filter} onChange={(v) => set('node_filter', v)} />
+
+      <div className="field" style={{ marginTop: 14 }}><label>备注</label><input value={f.remark} onChange={(e) => set('remark', e.target.value)} /></div>
     </Modal>
   );
 }

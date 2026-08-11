@@ -23,8 +23,10 @@ export function filterNodes(nodes, filter = {}) {
   const inc = toRegExp(filter.include);
   const exc = toRegExp(filter.exclude);
   const protos = Array.isArray(filter.protocols) ? filter.protocols.filter(Boolean) : [];
+  const exProtos = Array.isArray(filter.excludeProtocols) ? filter.excludeProtocols.filter(Boolean) : [];
   return nodes.filter((n) => {
     if (protos.length && !protos.includes(n.type)) return false;
+    if (exProtos.length && exProtos.includes(n.type)) return false;
     if (inc && !inc.test(n.name)) return false;
     if (exc && exc.test(n.name)) return false;
     return true;

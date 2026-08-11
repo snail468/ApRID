@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS airports (
   sub_url         TEXT,
   panel_type      TEXT DEFAULT 'sspanel',   -- sspanel | v2board | xboard | manual
   request_headers TEXT DEFAULT '{}',        -- JSON object
+  user_agent      TEXT,                     -- subscription pull User-Agent
+  cookie          TEXT,                     -- optional cookie for anti-bot protected panels
   proxy           TEXT,                     -- optional http/socks proxy for fetching
   group_name      TEXT,
   remark          TEXT,
@@ -88,8 +90,20 @@ CREATE TABLE IF NOT EXISTS users (
   remark       TEXT,
   node_filter  TEXT DEFAULT '{}',      -- which airports/nodes this user gets
   reset_at     INTEGER,                -- last subscription reset (invalidates old token)
+  traffic_base    INTEGER,             -- baseline airport used-traffic (A) at first measure, bytes
+  traffic_used    INTEGER,             -- measured usage since baseline (B - A), bytes
+  traffic_limit   INTEGER,             -- per-user cap in bytes (null/0 = unlimited)
+  traffic_updated_at INTEGER,
   created_at   INTEGER NOT NULL,
   updated_at   INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS groups (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind       TEXT NOT NULL,            -- 'airport' | 'user'
+  name       TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  UNIQUE(kind, name)
 );
 
 CREATE TABLE IF NOT EXISTS templates (
@@ -115,6 +129,19 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE INDEX IF NOT EXISTS idx_nodes_airport ON nodes(airport_id);
 CREATE INDEX IF NOT EXISTS idx_users_token   ON users(token);
 `);
+
+// ---- lightweight migrations: add columns that may be missing on older DBs ----
+function ensureColumns(table, columns) {
+  const existing = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name));
+  for (const [name, def] of Object.entries(columns)) {
+    if (!existing.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`);
+  }
+}
+ensureColumns('airports', { user_agent: 'TEXT', cookie: 'TEXT' });
+ensureColumns('users', {
+  traffic_base: 'INTEGER', traffic_used: 'INTEGER',
+  traffic_limit: 'INTEGER', traffic_updated_at: 'INTEGER',
+});
 
 // ---- settings helpers ----
 const getStmt = db.prepare('SELECT value FROM settings WHERE key = ?');

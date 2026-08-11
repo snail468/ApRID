@@ -41,12 +41,22 @@ export const API = {
   devices: () => api.get('/api/settings/devices'),
   revokeDevice: (id) => api.del(`/api/settings/devices/${id}`),
   revokeAllDevices: () => api.del('/api/settings/devices'),
+  // groups
+  groups: (kind) => api.get(`/api/groups?kind=${kind}`),
+  createGroup: (b) => api.post('/api/groups', b),
+  renameGroup: (id, name) => api.put(`/api/groups/${id}`, { name }),
+  deleteGroup: (id) => api.del(`/api/groups/${id}`),
+  // automation
+  automationOverview: () => api.get('/api/automation'),
+  runAirportReset: (airportId) => api.post('/api/automation/airport-reset', airportId ? { airportId } : {}),
+  runTrafficStats: () => api.post('/api/automation/traffic-stats', {}),
   // airports
   airports: () => api.get('/api/airports'),
   createAirport: (b) => api.post('/api/airports', b),
   updateAirport: (id, b) => api.put(`/api/airports/${id}`, b),
   deleteAirport: (id) => api.del(`/api/airports/${id}`),
   batchDeleteAirports: (ids) => api.post('/api/airports/batch/delete', { ids }),
+  batchGroupAirports: (ids, group_name) => api.post('/api/airports/batch/group', { ids, group_name }),
   fetchAirport: (id) => api.post(`/api/airports/${id}/fetch`),
   batchFetchAirports: (ids) => api.post('/api/airports/batch/fetch', { ids }),
   resetAirport: (id) => api.post(`/api/airports/${id}/reset`),
@@ -62,6 +72,7 @@ export const API = {
   deleteUser: (id) => api.del(`/api/users/${id}`),
   batchDeleteUsers: (ids) => api.post('/api/users/batch/delete', { ids }),
   batchToggleUsers: (ids, enabled) => api.post('/api/users/batch/toggle', { ids, enabled }),
+  batchGroupUsers: (ids, group_name) => api.post('/api/users/batch/group', { ids, group_name }),
   userSub: (id) => api.get(`/api/users/${id}/sub`),
   resetUser: (id, b) => api.post(`/api/users/${id}/reset`, b),
   // templates

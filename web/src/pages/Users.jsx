@@ -1,30 +1,29 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import QRCode from 'qrcode';
 import { API } from '../api.js';
-import { Modal, useConfirm, copyText, fmtDate, daysLeft, toDatetimeLocal, fromDatetimeLocal } from '../ui.jsx';
+import { Modal, useConfirm, copyText, fmtBytes, fmtDate, daysLeft, toDatetimeLocal, fromDatetimeLocal } from '../ui.jsx';
 import { useTable, SortTh } from '../hooks/useTable.jsx';
+import { useCachedResource, invalidate } from '../store.js';
+import { GroupSelect, GroupManagerModal, ProtocolPicker } from '../components.jsx';
 
-const STATUS_LABEL = { active: '正常', expiring: '即将到期', expired: '已过期', disabled: '已停用' };
-const STATUS_BADGE = { active: 'green', expiring: 'yellow', expired: 'red', disabled: 'gray' };
+const STATUS_LABEL = { active: '正常', expiring: '即将到期', expired: '已过期', exhausted: '流量用完', disabled: '已停用' };
+const STATUS_BADGE = { active: 'green', expiring: 'yellow', expired: 'red', exhausted: 'red', disabled: 'gray' };
+const GB = 1024 * 1024 * 1024;
+
+function safeParse(s) { try { return JSON.parse(s || '{}'); } catch { return {}; } }
 
 export default function Users({ toast }) {
-  const [rows, setRows] = useState([]);
-  const [templates, setTemplates] = useState([]);
-  const [airports, setAirports] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { data: rows = [], loading, refresh } = useCachedResource('users', () => API.users());
+  const { data: templates = [] } = useCachedResource('templates', () => API.templates());
+  const { data: airports = [] } = useCachedResource('airports', () => API.airports());
+  const { data: groups = [], refresh: refreshGroups } = useCachedResource('groups:user', () => API.groups('user'));
   const [editing, setEditing] = useState(null);
   const [subUser, setSubUser] = useState(null);
+  const [showGroups, setShowGroups] = useState(false);
+  const [batchGroup, setBatchGroup] = useState('');
   const [confirm, confirmNode] = useConfirm();
 
-  const load = useCallback(() => {
-    setLoading(true);
-    Promise.all([API.users(), API.templates(), API.airports()])
-      .then(([u, t, a]) => { setRows(u); setTemplates(t); setAirports(a); })
-      .catch((e) => toast.error(e.message))
-      .finally(() => setLoading(false));
-  }, [toast]);
-  useEffect(load, [load]);
-
+  const load = () => refresh();
   const t = useTable(rows, { searchKeys: ['name', 'group_name', 'remark'], initialSort: { key: 'id', dir: 'desc' } });
 
   const del = async (id) => { if (await confirm('删除该用户？其订阅将立即失效。')) { await API.deleteUser(id); load(); } };
@@ -40,14 +39,21 @@ export default function Users({ toast }) {
   const batchToggle = async (enabled) => {
     await API.batchToggleUsers([...t.selected], enabled); t.clearSelection(); toast.success('已更新'); load();
   };
-
-  const groups = [...new Set(rows.map((r) => r.group_name).filter(Boolean))];
+  const applyBatchGroup = () => {
+    const v = batchGroup === '__none__' ? '' : batchGroup;
+    API.batchGroupUsers([...t.selected], v || null).then(() => {
+      t.clearSelection(); setBatchGroup(''); toast.success('已设置分组'); load();
+    });
+  };
 
   return (
     <>
       <div className="page-head">
         <h1>用户</h1>
-        <button className="btn primary" onClick={() => setEditing({})}>+ 新增用户</button>
+        <div className="btn-row">
+          <button className="btn" onClick={() => setShowGroups(true)}>分组管理</button>
+          <button className="btn primary" onClick={() => setEditing({})}>+ 新增用户</button>
+        </div>
       </div>
 
       <div className="toolbar">
@@ -58,11 +64,17 @@ export default function Users({ toast }) {
         </select>
         <select style={{ width: 130 }} value={t.filters.group_name || ''} onChange={(e) => t.setFilters((f) => ({ ...f, group_name: e.target.value }))}>
           <option value="">全部分组</option>
-          {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+          {groups.map((g) => <option key={g.id} value={g.name}>{g.name}</option>)}
         </select>
         <div className="spacer" />
         {t.selected.size > 0 && (
           <>
+            <select style={{ width: 120 }} value={batchGroup} onChange={(e) => setBatchGroup(e.target.value)}>
+              <option value="">设为分组…</option>
+              <option value="__none__">无分组</option>
+              {groups.map((g) => <option key={g.id} value={g.name}>{g.name}</option>)}
+            </select>
+            <button className="btn sm" disabled={!batchGroup} onClick={applyBatchGroup}>应用</button>
             <button className="btn sm" onClick={() => batchToggle(true)}>批量启用</button>
             <button className="btn sm" onClick={() => batchToggle(false)}>批量停用</button>
             <button className="btn sm danger" onClick={batchDelete}>批量删除</button>
@@ -70,7 +82,7 @@ export default function Users({ toast }) {
         )}
       </div>
 
-      {loading ? <div className="empty"><span className="spin" /></div>
+      {loading && rows.length === 0 ? <div className="empty"><span className="spin" /></div>
         : rows.length === 0 ? <div className="empty">还没有用户，点击右上角新增。</div>
         : (
           <div className="table-wrap">
@@ -81,6 +93,7 @@ export default function Users({ toast }) {
                   <SortTh label="用户名" k="name" table={t} />
                   <th className="nosort">状态</th>
                   <SortTh label="到期时间" k="expire_at" table={t} />
+                  <th className="nosort">流量</th>
                   <SortTh label="分组" k="group_name" table={t} />
                   <th className="nosort">备注</th>
                   <th className="nosort">操作</th>
@@ -93,6 +106,7 @@ export default function Users({ toast }) {
                     <td><strong>{u.name}</strong></td>
                     <td><span className={`badge ${STATUS_BADGE[u.status]}`}>{STATUS_LABEL[u.status]}</span></td>
                     <td>{expireCell(u.expire_at, u.status)}</td>
+                    <td><TrafficCell used={u.traffic_used} limit={u.traffic_limit} /></td>
                     <td>{u.group_name || '-'}</td>
                     <td className="small muted">{u.remark || '-'}</td>
                     <td className="actions">
@@ -113,6 +127,7 @@ export default function Users({ toast }) {
           <div className={`mcard row-${u.status}`} key={u.id}>
             <div className="mrow"><strong>{u.name}</strong><span className={`badge ${STATUS_BADGE[u.status]}`}>{STATUS_LABEL[u.status]}</span></div>
             <div className="mrow"><span className="k">到期</span>{expireCell(u.expire_at, u.status)}</div>
+            <div className="mrow"><span className="k">流量</span><TrafficCell used={u.traffic_used} limit={u.traffic_limit} /></div>
             <div className="mrow"><span className="k">分组</span><span>{u.group_name || '-'}</span></div>
             <div className="btn-row" style={{ marginTop: 10 }}>
               <button className="btn sm primary" onClick={() => setSubUser(u)}>订阅</button>
@@ -124,9 +139,10 @@ export default function Users({ toast }) {
         ))}
       </div>
 
-      {editing && <UserModal user={editing} templates={templates} airports={airports} toast={toast}
-        onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
+      {editing && <UserModal user={editing} templates={templates} airports={airports} groups={groups} toast={toast}
+        onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); refreshGroups(); }} />}
       {subUser && <SubModal user={subUser} toast={toast} onClose={() => setSubUser(null)} />}
+      {showGroups && <GroupManagerModal kind="user" title="用户分组管理" toast={toast} onClose={() => setShowGroups(false)} onChanged={() => { refreshGroups(); load(); }} />}
       {confirmNode}
     </>
   );
@@ -138,17 +154,34 @@ function expireCell(ms, status) {
   return <span>{fmtDate(ms)} {status === 'expired' ? <span className="muted">已过期</span> : <span className="muted">({d}天)</span>}</span>;
 }
 
+function TrafficCell({ used, limit }) {
+  const u = Number(used || 0);
+  const lim = Number(limit || 0);
+  if (!lim && !u) return <span className="muted">-</span>;
+  const pct = lim > 0 ? Math.min(100, Math.round((u / lim) * 100)) : 0;
+  const cls = pct >= 100 ? 'red' : pct >= 80 ? 'yellow' : 'green';
+  return (
+    <div className="usage-inline">
+      {lim > 0 && <div className="usage-bar"><span className={`usage-fill ${cls}`} style={{ width: `${pct}%` }} /></div>}
+      <div className="small muted" style={{ marginTop: lim > 0 ? 3 : 0 }}>{fmtBytes(u)} / {lim > 0 ? fmtBytes(lim) : '不限'}</div>
+    </div>
+  );
+}
+
 /* ---------------- User edit modal ---------------- */
-function UserModal({ user, templates, airports, toast, onClose, onSaved }) {
+function UserModal({ user, templates, airports, groups, toast, onClose, onSaved }) {
   const isNew = !user.id;
-  let uf = {}; try { uf = JSON.parse(user.node_filter || '{}'); } catch { /* noop */ }
+  const uf = safeParse(user.node_filter);
   const [f, setF] = useState({
     name: user.name || '', enabled: user.enabled === undefined ? true : !!user.enabled,
     expire_at: toDatetimeLocal(user.expire_at), template_id: user.template_id || '',
     group_name: user.group_name || '', remark: user.remark || '',
+    traffic_limit_gb: user.traffic_limit ? (user.traffic_limit / GB) : '',
     airports: uf.airports || [], include: uf.include || '', exclude: uf.exclude || '', prefix: uf.prefix || '',
+    protocols: uf.protocols || [], excludeProtocols: uf.excludeProtocols || [],
   });
   const [saving, setSaving] = useState(false);
+  const [hideAssigned, setHideAssigned] = useState(false);
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
   const toggleAirport = (id) => setF((s) => ({
     ...s, airports: s.airports.includes(id) ? s.airports.filter((x) => x !== id) : [...s.airports, id],
@@ -158,20 +191,26 @@ function UserModal({ user, templates, airports, toast, onClose, onSaved }) {
     if (!f.name.trim()) return toast.error('用户名称必填');
     setSaving(true);
     const node_filter = JSON.stringify({
-      airports: f.airports, include: f.include || undefined, exclude: f.exclude || undefined, prefix: f.prefix || undefined,
+      airports: f.airports,
+      include: f.include || undefined, exclude: f.exclude || undefined, prefix: f.prefix || undefined,
+      protocols: f.protocols.length ? f.protocols : undefined,
+      excludeProtocols: f.excludeProtocols.length ? f.excludeProtocols : undefined,
     });
     const body = {
       name: f.name, enabled: f.enabled, expire_at: fromDatetimeLocal(f.expire_at),
       template_id: f.template_id || null, group_name: f.group_name, remark: f.remark, node_filter,
+      traffic_limit: f.traffic_limit_gb ? Math.round(Number(f.traffic_limit_gb) * GB) : null,
     };
     try {
       if (isNew) await API.createUser(body); else await API.updateUser(user.id, body);
-      toast.success('已保存'); onSaved();
+      toast.success('已保存'); invalidate('users'); onSaved();
     } catch (e) { toast.error(e.message); } finally { setSaving(false); }
   };
 
+  const visibleAirports = hideAssigned ? airports.filter((a) => !f.airports.includes(a.id)) : airports;
+
   return (
-    <Modal title={isNew ? '新增用户' : `编辑用户 · ${user.name}`} onClose={onClose}
+    <Modal wide title={isNew ? '新增用户' : `编辑用户 · ${user.name}`} onClose={onClose}
       footer={<>
         <button className="btn" onClick={onClose}>取消</button>
         <button className="btn primary" onClick={save} disabled={saving}>{saving ? <span className="spin" /> : '保存'}</button>
@@ -187,27 +226,40 @@ function UserModal({ user, templates, airports, toast, onClose, onSaved }) {
             {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
           </select>
         </div>
-        <div className="field"><label>分组</label><input value={f.group_name} onChange={(e) => set('group_name', e.target.value)} /></div>
-      </div>
-      <div className="field checkbox-inline">
-        <input type="checkbox" id="enabled" checked={f.enabled} onChange={(e) => set('enabled', e.target.checked)} />
-        <label htmlFor="enabled" style={{ margin: 0 }}>启用该用户</label>
-      </div>
-      <div className="field">
-        <label>下发机场（不选=全部）</label>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          {airports.map((a) => (
-            <label key={a.id} className="checkbox-inline" style={{ margin: 0 }}>
-              <input type="checkbox" checked={f.airports.includes(a.id)} onChange={() => toggleAirport(a.id)} /> {a.name}
-            </label>
-          ))}
-          {airports.length === 0 && <span className="muted small">暂无机场</span>}
-        </div>
+        <div className="field"><label>分组</label><GroupSelect value={f.group_name} groups={groups} onChange={(v) => set('group_name', v)} /></div>
       </div>
       <div className="field-row">
-        <div className="field"><label>包含节点（正则）</label><input value={f.include} onChange={(e) => set('include', e.target.value)} placeholder="香港|日本" /></div>
-        <div className="field"><label>排除节点（正则）</label><input value={f.exclude} onChange={(e) => set('exclude', e.target.value)} placeholder="过期|官网" /></div>
+        <div className="field"><label>流量上限 (GB，留空=不限)</label>
+          <input type="number" min="0" step="0.1" value={f.traffic_limit_gb} onChange={(e) => set('traffic_limit_gb', e.target.value)} placeholder="如 100" />
+        </div>
+        <div className="field checkbox-inline" style={{ alignSelf: 'end', marginBottom: 14 }}>
+          <input type="checkbox" id="enabled" checked={f.enabled} onChange={(e) => set('enabled', e.target.checked)} />
+          <label htmlFor="enabled" style={{ margin: 0 }}>启用该用户</label>
+        </div>
       </div>
+
+      <div className="field">
+        <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>下发机场（不选=全部；同机场不同账户视为不同项）</span>
+          <button type="button" className="btn sm" onClick={() => setHideAssigned((v) => !v)}>{hideAssigned ? '显示全部' : '隐藏已下发机场'}</button>
+        </label>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {visibleAirports.map((a) => (
+            <label key={a.id} className="chip-check">
+              <input type="checkbox" checked={f.airports.includes(a.id)} onChange={() => toggleAirport(a.id)} />
+              {a.name}{a.account ? <span className="muted"> / {a.account}</span> : ''}
+            </label>
+          ))}
+          {visibleAirports.length === 0 && <span className="muted small">{hideAssigned ? '已全部下发' : '暂无机场'}</span>}
+        </div>
+      </div>
+
+      <div className="field-row">
+        <div className="field"><label>包含节点（名称正则）</label><input value={f.include} onChange={(e) => set('include', e.target.value)} placeholder="香港|日本" /></div>
+        <div className="field"><label>排除节点（名称正则）</label><input value={f.exclude} onChange={(e) => set('exclude', e.target.value)} placeholder="过期|官网" /></div>
+      </div>
+      <div className="field"><label>包含节点（按协议，不勾=全部）</label><ProtocolPicker value={f.protocols} onChange={(v) => set('protocols', v)} /></div>
+      <div className="field"><label>排除节点（按协议）</label><ProtocolPicker value={f.excludeProtocols} onChange={(v) => set('excludeProtocols', v)} /></div>
       <div className="field"><label>节点名前缀</label><input value={f.prefix} onChange={(e) => set('prefix', e.target.value)} /></div>
       <div className="field"><label>备注</label><input value={f.remark} onChange={(e) => set('remark', e.target.value)} /></div>
     </Modal>
@@ -261,7 +313,7 @@ function SubModal({ user, toast, onClose }) {
               ))}
             </div>
             {qr ? <img src={qr} alt="qr" width={220} height={220} /> : <div className="empty"><span className="spin" /></div>}
-            <div className="muted small" style={{ marginTop: 8 }}>{data.name}</div>
+            <div className="muted small" style={{ marginTop: 8 }}>订阅名：{data.name}</div>
             <div className="muted small">扫码导入 · {CLIENTS.find((c) => c.k === client)?.l}</div>
           </div>
         </div>

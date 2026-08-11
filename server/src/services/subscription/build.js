@@ -14,9 +14,17 @@ function noticeNode(message) {
   }];
 }
 
+// true when a per-user traffic cap is configured and has been reached
+export function trafficExhausted(user) {
+  const limit = Number(user.traffic_limit || 0);
+  const used = Number(user.traffic_used || 0);
+  return limit > 0 && used >= limit;
+}
+
 export function userStatus(user) {
   if (!user.enabled) return 'disabled';
   if (user.expire_at && user.expire_at < Date.now()) return 'expired';
+  if (trafficExhausted(user)) return 'exhausted';
   const days = user.expire_at ? (user.expire_at - Date.now()) / 86400000 : Infinity;
   if (days <= 3) return 'expiring';
   return 'active';
@@ -61,6 +69,8 @@ export function buildSubscription(user, format) {
     nodes = noticeNode('订阅已停用');
   } else if (status === 'expired') {
     nodes = noticeNode('已到期，请续费');
+  } else if (status === 'exhausted') {
+    nodes = noticeNode('流量已用完，请续费');
   } else {
     nodes = collectUserNodes(user);
     if (!nodes.length) nodes = noticeNode('暂无可用节点');

@@ -47,6 +47,25 @@ const proc = processAirportNodes(dup, { exclude: '官网', prefix: '🇭🇰', r
 ok(proc.length === 2, 'filter dropped 官网 node');
 ok(proc[0].name === '🇭🇰HK' && proc[1].name === '🇭🇰HK 2', `rename+prefix+dedup -> ${proc.map((n) => n.name).join(', ')}`);
 
+// --- anytls protocol ---
+const anytls = 'anytls://anytlspass@at.example.com:443?sni=at.example.com&insecure=1#香港AnyTLS';
+const an = parseUri(anytls);
+ok(an && an.type === 'anytls' && an.server === 'at.example.com' && an.raw.password === 'anytlspass', `parse anytls -> ${an?.name}`);
+ok(toBase64([an]).length > 0 && Buffer.from(toBase64([an]), 'base64').toString().startsWith('anytls://'), 'toBase64 anytls');
+ok(toClash([an]).includes('type: anytls'), 'toClash anytls');
+ok(JSON.parse(toSingbox([an])).outbounds.some((o) => o.type === 'anytls'), 'toSingbox anytls');
+
+// --- excludeProtocols filter ---
+const mixed = [
+  { name: 'A', type: 'vmess', server: 'a', port: 1, raw: {} },
+  { name: 'B', type: 'ss', server: 'b', port: 2, raw: {} },
+  { name: 'C', type: 'anytls', server: 'c', port: 3, raw: {} },
+];
+const noSs = processAirportNodes(mixed, { excludeProtocols: ['ss'] });
+ok(noSs.length === 2 && !noSs.some((n) => n.type === 'ss'), 'excludeProtocols drops ss');
+const onlyAny = processAirportNodes(mixed, { protocols: ['anytls'] });
+ok(onlyAny.length === 1 && onlyAny[0].type === 'anytls', 'protocols keeps only anytls');
+
 // --- converters ---
 const nodes = parseSubscription(blob);
 ok(Buffer.from(toBase64(nodes), 'base64').toString().includes('vmess://'), 'toBase64 round-trips');

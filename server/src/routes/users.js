@@ -10,7 +10,7 @@ import { runUserTriggeredReset } from '../services/automation.js';
 const router = express.Router();
 router.use(requireAuth);
 
-const FIELDS = ['name', 'enabled', 'expire_at', 'template_id', 'group_name', 'remark', 'node_filter'];
+const FIELDS = ['name', 'enabled', 'expire_at', 'template_id', 'group_name', 'remark', 'node_filter', 'traffic_limit'];
 
 function normalize(body) {
   const out = {};
@@ -83,6 +83,16 @@ router.post('/batch/delete', (req, res) => {
   const del = db.prepare('DELETE FROM users WHERE id = ?');
   db.transaction((list) => list.forEach((id) => del.run(id)))(ids);
   res.json({ ok: true, deleted: ids.length });
+});
+
+// batch set group
+router.post('/batch/group', (req, res) => {
+  const { ids = [], group_name = null } = req.body || {};
+  const g = group_name ? String(group_name).trim() || null : null;
+  const upd = db.prepare('UPDATE users SET group_name = ?, updated_at = ? WHERE id = ?');
+  const now = Date.now();
+  db.transaction((list) => list.forEach((id) => upd.run(g, now, id)))(ids);
+  res.json({ ok: true });
 });
 
 // batch enable/disable

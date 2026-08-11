@@ -1,23 +1,16 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
 import { API } from '../api.js';
 import { useConfirm } from '../ui.jsx';
 import { useTable, SortTh } from '../hooks/useTable.jsx';
+import { useCachedResource } from '../store.js';
 
 export default function Nodes({ toast }) {
-  const [rows, setRows] = useState([]);
-  const [airports, setAirports] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { data: rows = [], loading, refresh } = useCachedResource('nodes:', () => API.nodes());
+  const { data: airports = [] } = useCachedResource('airports', () => API.airports());
   const [pinging, setPinging] = useState(false);
   const [confirm, confirmNode] = useConfirm();
 
-  const load = useCallback(() => {
-    setLoading(true);
-    Promise.all([API.nodes(), API.airports()])
-      .then(([n, a]) => { setRows(n); setAirports(a); })
-      .catch((e) => toast.error(e.message))
-      .finally(() => setLoading(false));
-  }, [toast]);
-  useEffect(load, [load]);
+  const load = () => refresh();
 
   const t = useTable(rows, { searchKeys: ['name', 'server', 'airport_name'], initialSort: { key: 'airport_id', dir: 'asc' } });
   const protocols = [...new Set(rows.map((r) => r.type))];
@@ -55,7 +48,7 @@ export default function Nodes({ toast }) {
         {t.selected.size > 0 && <button className="btn sm danger" onClick={batchDelete}>批量删除</button>}
       </div>
 
-      {loading ? <div className="empty"><span className="spin" /></div>
+      {loading && rows.length === 0 ? <div className="empty"><span className="spin" /></div>
         : rows.length === 0 ? <div className="empty">暂无节点，请到机场管理拉取订阅。</div>
         : (
           <div className="table-wrap">

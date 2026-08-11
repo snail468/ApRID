@@ -2,18 +2,19 @@ import { ProxyAgent } from 'undici';
 import { db } from '../../db.js';
 import { parseSubscription, parseUserInfo } from '../nodeParser.js';
 import { processAirportNodes } from '../nodeProcess.js';
+import { detectChallenge, ANTIBOT_HINT } from './antibot.js';
+
+export const DEFAULT_UA = 'ClashMetaForAndroid/2.10.1.Meta';
 
 function safeJson(s, fallback = {}) {
   if (!s) return fallback;
   try { return JSON.parse(s); } catch { return fallback; }
 }
 
-export async function httpGet(url, { headers = {}, proxy, method = 'GET', body } = {}) {
-  const opts = {
-    method,
-    headers: { 'User-Agent': 'ClashMetaForAndroid/2.10.1', ...headers },
-    redirect: 'follow',
-  };
+export async function httpGet(url, { headers = {}, proxy, method = 'GET', body, userAgent, cookie } = {}) {
+  const finalHeaders = { 'User-Agent': userAgent || DEFAULT_UA, ...headers };
+  if (cookie) finalHeaders.Cookie = cookie;
+  const opts = { method, headers: finalHeaders, redirect: 'follow' };
   if (body) opts.body = body;
   if (proxy) opts.dispatcher = new ProxyAgent(proxy);
   const res = await fetch(url, opts);
@@ -31,7 +32,12 @@ export async function fetchAirport(airportId) {
   const { status, headers: resHeaders, text } = await httpGet(ap.sub_url, {
     headers,
     proxy: ap.proxy || undefined,
+    userAgent: ap.user_agent || undefined,
+    cookie: ap.cookie || undefined,
   });
+
+  const challenge = detectChallenge(status, text, resHeaders);
+  if (challenge) throw new Error(`${challenge}。${ANTIBOT_HINT}`);
   if (status >= 400) throw new Error(`拉取失败 HTTP ${status}`);
 
   const rawNodes = parseSubscription(text);

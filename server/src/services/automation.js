@@ -1,6 +1,7 @@
 import { db } from '../db.js';
 import { resetAirportSubscription } from './airport/adapters.js';
 import { fetchAirport } from './airport/fetch.js';
+import { fmtBytes } from './util.js';
 
 function createTask(type, refId) {
   const now = Date.now();
@@ -42,6 +43,72 @@ export async function runAirportReset(airportId) {
 
     finishTask(taskId, 'success');
     return { taskId, subUrl, count };
+  } catch (err) {
+    appendLog(taskId, `失败：${err.message}`);
+    finishTask(taskId, 'failed');
+    throw Object.assign(err, { taskId });
+  }
+}
+
+// "用户流量统计" automation.
+// For each enabled user, the panel measures how much its airport account(s) have
+// consumed since the user's baseline. traffic_used = current airport used - baseline(A).
+// When a per-user traffic_limit is reached, subscriptions auto-cut (see build.js).
+// Pass { refetch: true } to pull each airport first so the numbers are fresh.
+export async function runTrafficStats({ refetch = true } = {}) {
+  const taskId = createTask('traffic_stats', null);
+  try {
+    appendLog(taskId, `开始统计用户流量${refetch ? '（先刷新机场用量）' : ''}`);
+    const airports = db.prepare('SELECT id, name, sub_url, used_traffic FROM airports').all();
+
+    // optionally refresh each airport's used_traffic by pulling its subscription
+    if (refetch) {
+      for (const ap of airports) {
+        if (!ap.sub_url) continue;
+        try {
+          await fetchAirport(ap.id);
+        } catch (err) {
+          appendLog(taskId, `机场「${ap.name}」刷新失败：${err.message}`);
+        }
+      }
+    }
+
+    const usedByAirport = Object.fromEntries(
+      db.prepare('SELECT id, used_traffic FROM airports').all().map((a) => [a.id, Number(a.used_traffic || 0)])
+    );
+
+    const users = db.prepare('SELECT * FROM users WHERE enabled = 1').all();
+    let cutoff = 0;
+    const now = Date.now();
+    for (const u of users) {
+      let filter = {};
+      try { filter = JSON.parse(u.node_filter || '{}'); } catch { /* noop */ }
+      const airportIds = Array.isArray(filter.airports) && filter.airports.length
+        ? filter.airports
+        : airports.map((a) => a.id);
+      const current = airportIds.reduce((sum, id) => sum + (usedByAirport[id] || 0), 0);
+
+      let base = u.traffic_base;
+      let used;
+      if (base == null) {
+        base = current; // first measurement establishes baseline A
+        used = 0;
+      } else {
+        used = Math.max(0, current - base);
+      }
+      db.prepare('UPDATE users SET traffic_base = ?, traffic_used = ?, traffic_updated_at = ? WHERE id = ?')
+        .run(base, used, now, u.id);
+
+      const limit = Number(u.traffic_limit || 0);
+      if (limit > 0 && used >= limit) {
+        cutoff++;
+        appendLog(taskId, `用户「${u.name}」流量已用完（${fmtBytes(used)}/${fmtBytes(limit)}），订阅已自动切断`);
+      }
+    }
+
+    appendLog(taskId, `完成：统计 ${users.length} 个启用用户，其中 ${cutoff} 个已达上限被切断`);
+    finishTask(taskId, 'success');
+    return { taskId, users: users.length, cutoff };
   } catch (err) {
     appendLog(taskId, `失败：${err.message}`);
     finishTask(taskId, 'failed');
