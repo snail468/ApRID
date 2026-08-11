@@ -1,14 +1,30 @@
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import bcrypt from 'bcryptjs';
 import { config } from './config.js';
 
+// Use Node's built-in SQLite (compiled into the node binary) instead of the
+// native better-sqlite3 addon — the addon segfaulted (exit 139) on some hosts
+// at `new Database()`, while the built-in engine runs anywhere node runs.
 fs.mkdirSync(path.dirname(config.dbPath), { recursive: true });
 
-export const db = new Database(config.dbPath);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+export const db = new DatabaseSync(config.dbPath);
+db.exec('PRAGMA journal_mode = WAL');
+db.exec('PRAGMA foreign_keys = ON');
+
+// better-sqlite3-compatible transaction helper: db.transaction(fn)(...args)
+db.transaction = (fn) => (...args) => {
+  db.exec('BEGIN');
+  try {
+    const result = fn(...args);
+    db.exec('COMMIT');
+    return result;
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+};
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS settings (

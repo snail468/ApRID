@@ -2,7 +2,7 @@
 
 一个机场资源整合（"二道贩子"）面板：聚合多个机场的节点，按用户下发订阅。
 
-- 后端：Node.js + Express + better-sqlite3
+- 后端：Node.js + Express + 内置 SQLite（`node:sqlite`，无原生依赖）
 - 前端：React + Vite
 - 部署：单容器 Docker，一键启动，公网端口 **6601**
 

@@ -1,5 +1,5 @@
 # ---------- Stage 1: build frontend ----------
-FROM node:20-slim AS web
+FROM node:24-slim AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json* ./
 RUN npm install
@@ -7,21 +7,15 @@ COPY web/ ./
 RUN npm run build
 
 # ---------- Stage 2: install server deps ----------
-# Use a glibc base (Debian slim), NOT alpine/musl.
-# better-sqlite3's downloaded prebuilt binary loads but SEGFAULTS on actual
-# SQLite calls on some CPUs (exit 139). Force compiling it FROM SOURCE against
-# this exact Node/glibc so the native binary is fully compatible everywhere.
-FROM node:20-slim AS server-deps
+# No native modules anymore (uses Node's built-in node:sqlite), so a plain
+# npm install with no build toolchain — small and fast, works on any x86_64/arm64.
+FROM node:24-slim AS server-deps
 WORKDIR /app
 COPY server/package.json server/package-lock.json* ./
-ENV npm_config_build_from_source=true
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 make g++ \
-    && npm install --omit=dev \
-    && rm -rf /var/lib/apt/lists/*
+RUN npm install --omit=dev
 
 # ---------- Stage 3: runtime ----------
-FROM node:20-slim AS runtime
+FROM node:24-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=6601
