@@ -27,6 +27,25 @@ docker compose up -d
 
 访问 `http://<服务器IP>:6601`。
 
+## CI / 预构建镜像
+
+每次推送到 `main`，GitHub Actions 会自动跑测试、构建前端，并把 Docker 镜像发布到 GHCR：
+`ghcr.io/snail468/aprid:latest`。服务器上可直接拉取预构建镜像，免本地编译：
+
+```bash
+docker run -d --name aprid -p 6601:6601 \
+  -e ADMIN_USERNAME=admin -e ADMIN_PASSWORD=改我 -e JWT_SECRET=改我随机串 \
+  -v $PWD/data:/data ghcr.io/snail468/aprid:latest
+```
+
+> 首次发布后需在仓库 Packages 页把该镜像设为 Public 才能匿名拉取。工作流见 [.github/workflows/ci.yml](.github/workflows/ci.yml)。
+
+## 测试
+
+```bash
+cd server && npm test   # 协议解析 / 订阅转换 / 节点处理 逻辑测试
+```
+
 ## 本地开发
 
 ```bash
