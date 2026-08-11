@@ -75,7 +75,7 @@ function Shell({ auth, onLogout, toast }) {
           <button className="btn sm theme-toggle" onClick={toggle} title="切换主题">
             {theme === 'dark' ? '☀️ 白天' : '🌙 黑夜'}
           </button>
-          <div className="small muted" style={{ margin: '8px 0' }}>👤 {auth.user}</div>
+          <div className="small muted user-chip">👤 {auth.user}</div>
           <button className="btn sm" onClick={logout}>退出登录</button>
         </div>
       </aside>

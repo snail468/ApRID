@@ -120,29 +120,43 @@ function buildProxy({ scheme, host, port, user, pass }) {
   return `${scheme}://${auth}${host}:${port}`;
 }
 export function ProxyBuilder({ value, onChange }) {
-  const p = parseProxy(value);
-  const set = (k, v) => onChange(buildProxy({ ...p, [k]: v }));
+  // Hold the proxy parts in local state. buildProxy() returns '' until host+port
+  // are both present, so we cannot derive the parts back from `value` on each
+  // render (that made picking a scheme immediately vanish). Keep local state and
+  // only re-sync when `value` changes to something we didn't produce.
+  const [p, setP] = useState(() => parseProxy(value));
+  useEffect(() => {
+    if (buildProxy(p) !== (value || '')) setP(parseProxy(value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+  const update = (patch) => {
+    const next = { ...p, ...patch };
+    setP(next);
+    onChange(buildProxy(next));
+  };
   return (
     <div>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-        <select style={{ flex: '0 0 120px' }} value={p.scheme} onChange={(e) => {
-          const scheme = e.target.value;
-          onChange(scheme ? buildProxy({ ...p, scheme }) : '');
-        }}>
+        <select style={{ flex: '0 0 120px' }} value={p.scheme} onChange={(e) => update({ scheme: e.target.value })}>
           <option value="">不使用代理</option>
           <option value="http">HTTP</option>
           <option value="socks5">SOCKS5</option>
         </select>
         {p.scheme && <>
-          <input style={{ flex: 1, minWidth: 120 }} placeholder="主机 IP/域名" value={p.host} onChange={(e) => set('host', e.target.value)} />
-          <input style={{ flex: '0 0 90px' }} placeholder="端口" value={p.port} onChange={(e) => set('port', e.target.value)} />
+          <input style={{ flex: 1, minWidth: 120 }} placeholder="主机 IP/域名" value={p.host} onChange={(e) => update({ host: e.target.value })} />
+          <input style={{ flex: '0 0 90px' }} placeholder="端口" value={p.port} onChange={(e) => update({ port: e.target.value })} />
         </>}
       </div>
       {p.scheme && (
-        <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-          <input placeholder="用户名（可选）" value={p.user} onChange={(e) => set('user', e.target.value)} />
-          <input placeholder="密码（可选）" value={p.pass} onChange={(e) => set('pass', e.target.value)} />
-        </div>
+        <>
+          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+            <input placeholder="用户名（可选）" value={p.user} onChange={(e) => update({ user: e.target.value })} />
+            <input placeholder="密码（可选）" value={p.pass} onChange={(e) => update({ pass: e.target.value })} />
+          </div>
+          <div className="muted small" style={{ marginTop: 4 }}>
+            {buildProxy(p) ? `将使用：${buildProxy(p)}` : '请填写主机与端口'}
+          </div>
+        </>
       )}
     </div>
   );

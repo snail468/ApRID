@@ -19,9 +19,13 @@ function agent(proxy) {
 }
 
 function origin(url) {
-  const u = new URL(url);
+  let raw = (url || '').trim();
+  if (!/^https?:\/\//i.test(raw)) raw = 'https://' + raw; // tolerate bare host input
+  const u = new URL(raw);
   return `${u.protocol}//${u.host}`;
 }
+
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
 // ---------------- V2Board / Xboard ----------------
 async function v2boardReset(ap) {
@@ -30,20 +34,26 @@ async function v2boardReset(ap) {
   const common = { 'Content-Type': 'application/json', 'User-Agent': UA(ap) };
   if (ap.cookie) common.Cookie = ap.cookie;
 
-  // 1. login -> auth_data token
-  const loginRes = await fetch(`${base}/api/v1/passport/auth/login`, {
-    method: 'POST',
-    headers: common,
-    dispatcher,
-    body: JSON.stringify({ email: ap.account, password: ap.password }),
-  });
-  const loginText = await loginRes.text();
-  const challenge = detectChallenge(loginRes.status, loginText, loginRes.headers);
-  if (challenge) throw new Error(`${challenge}。${ANTIBOT_HINT}`);
-  let login = {};
-  try { login = JSON.parse(loginText); } catch { /* noop */ }
-  const authData = login?.data?.auth_data || login?.data?.token;
-  if (!authData) throw new Error('登录失败：账号或密码错误（V2Board）');
+  // If a captured Authorization token is provided, skip the login step entirely.
+  // Login is where anti-bot/captcha usually blocks; a browser-captured token
+  // lets us go straight to the reset call.
+  let authData = (ap.auth_token || '').trim() || null;
+  if (!authData) {
+    // 1. login -> auth_data token
+    const loginRes = await fetch(`${base}/api/v1/passport/auth/login`, {
+      method: 'POST',
+      headers: common,
+      dispatcher,
+      body: JSON.stringify({ email: ap.account, password: ap.password }),
+    });
+    const loginText = await loginRes.text();
+    const challenge = detectChallenge(loginRes.status, loginText, loginRes.headers);
+    if (challenge) throw new Error(`${challenge}。${ANTIBOT_HINT}`);
+    let login = {};
+    try { login = JSON.parse(loginText); } catch { /* noop */ }
+    authData = login?.data?.auth_data || login?.data?.token;
+    if (!authData) throw new Error('登录失败：账号或密码错误（V2Board）');
+  }
   const authHeaders = { ...common, Authorization: authData };
   delete authHeaders['Content-Type'];
 
@@ -153,9 +163,63 @@ async function genericReset(ap) {
   throw new Error(`通用适配器未能识别面板类型，尝试记录：\n${errors.join('\n')}`);
 }
 
+// ---------------- Panel type auto-detection ----------------
+// Best-effort: probe the airport site to guess which panel family it runs, so
+// the operator doesn't have to know it up front. Returns { panel_type, detail }.
+export async function detectPanelType(rawUrl, { proxy, cookie, userAgent } = {}) {
+  if (!rawUrl || !rawUrl.trim()) throw new Error('请先填写机场网址');
+  const base = origin(rawUrl);
+  const dispatcher = agent(proxy);
+  const headers = { 'User-Agent': userAgent || BROWSER_UA };
+  if (cookie) headers.Cookie = cookie;
+
+  // 1) V2Board / Xboard expose a guest config JSON endpoint
+  try {
+    const res = await fetch(`${base}/api/v1/guest/comm/config`, { headers, dispatcher });
+    if (res.ok) {
+      const txt = await res.text();
+      try {
+        const j = JSON.parse(txt);
+        if (j && j.data !== undefined) {
+          const isX = JSON.stringify(j).toLowerCase().includes('xboard');
+          return { panel_type: isX ? 'xboard' : 'v2board', detail: '匹配 V2Board/Xboard API（/api/v1/guest/comm/config）' };
+        }
+      } catch { /* not json */ }
+    }
+  } catch { /* ignore, fall through */ }
+
+  // 2) Fetch homepage and scan for fingerprints
+  let html = '';
+  let res;
+  try {
+    res = await fetch(base, { headers, dispatcher, redirect: 'follow' });
+    html = (await res.text()).slice(0, 20000);
+  } catch (e) {
+    throw new Error(`无法访问机场网址：${e.message}`);
+  }
+  const challenge = detectChallenge(res.status, html, res.headers);
+  if (challenge) throw new Error(`${challenge}。${ANTIBOT_HINT}`);
+
+  const low = html.toLowerCase();
+  if (low.includes('sspanel')) return { panel_type: 'sspanel', detail: '页面特征匹配 SSPanel-Uim' };
+  if (low.includes('xboard')) return { panel_type: 'xboard', detail: '页面特征匹配 Xboard' };
+  if (low.includes('v2board')) return { panel_type: 'v2board', detail: '页面特征匹配 V2Board' };
+  // SSPanel classic login form uses a `passwd` field
+  if (low.includes('name="passwd"') || low.includes("name='passwd'")) {
+    return { panel_type: 'sspanel', detail: '登录表单含 passwd 字段，疑似 SSPanel' };
+  }
+  // V2Board/Xboard SPA shell
+  if (/id=["']app["']/.test(low) && (low.includes('window.settings') || low.includes('/assets/') || low.includes('/theme/'))) {
+    return { panel_type: 'v2board', detail: '页面结构疑似 V2Board/Xboard 单页应用' };
+  }
+  return { panel_type: 'generic', detail: '未能确定面板类型，已回退为「通用（自动识别）」' };
+}
+
 export async function resetAirportSubscription(ap) {
   if (!ap.url) throw new Error('机场未配置网址');
-  if (!ap.account || !ap.password) throw new Error('机场未配置登录账号或密码');
+  if (!ap.auth_token && (!ap.account || !ap.password)) {
+    throw new Error('机场未配置登录账号或密码（或改用「登录令牌」直连）');
+  }
   switch (ap.panel_type) {
     case 'v2board':
     case 'xboard':

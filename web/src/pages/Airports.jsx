@@ -194,15 +194,28 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
   const [f, setF] = useState({
     name: airport.name || '', url: airport.url || '', account: airport.account || '',
     password: airport.password || '', sub_url: airport.sub_url || '',
-    panel_type: airport.panel_type || 'sspanel', group_name: airport.group_name || '',
+    panel_type: airport.panel_type || 'generic', group_name: airport.group_name || '',
     remark: airport.remark || '', proxy: airport.proxy || '',
     user_agent: airport.user_agent || '', cookie: airport.cookie || '',
+    auth_token: airport.auth_token || '',
     request_headers: safeParse(airport.request_headers),
     node_filter: safeParse(airport.node_filter),
     expire_at: toDatetimeLocal(airport.expire_at),
   });
   const [saving, setSaving] = useState(false);
+  const [detecting, setDetecting] = useState(false);
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+
+  const detect = async () => {
+    if (!f.url.trim()) return toast.error('请先填写机场网址');
+    setDetecting(true);
+    try {
+      const r = await API.detectPanel({ url: f.url, proxy: f.proxy, cookie: f.cookie, user_agent: f.user_agent });
+      set('panel_type', r.panel_type);
+      toast.success(`识别为「${r.panel_type}」：${r.detail}`);
+    } catch (e) { toast.error(e.message); }
+    finally { setDetecting(false); }
+  };
 
   const save = async () => {
     if (!f.name.trim()) return toast.error('机场名称必填');
@@ -230,9 +243,15 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
       <div className="field-row">
         <div className="field"><label>机场名称 *</label><input value={f.name} onChange={(e) => set('name', e.target.value)} /></div>
         <div className="field"><label>面板类型</label>
-          <select value={f.panel_type} onChange={(e) => set('panel_type', e.target.value)}>
-            {PANEL_TYPES.map((p) => <option key={p.v} value={p.v}>{p.l}</option>)}
-          </select>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <select value={f.panel_type} onChange={(e) => set('panel_type', e.target.value)}>
+              {PANEL_TYPES.map((p) => <option key={p.v} value={p.v}>{p.l}</option>)}
+            </select>
+            <button type="button" className="btn sm" style={{ flex: '0 0 auto', whiteSpace: 'nowrap' }}
+              onClick={detect} disabled={detecting} title="通过机场网址自动识别面板类型">
+              {detecting ? <span className="spin" /> : '自动识别'}
+            </button>
+          </div>
         </div>
       </div>
       <div className="field"><label>机场网址</label><input value={f.url} onChange={(e) => set('url', e.target.value)} placeholder="https://example.com" /></div>
@@ -253,6 +272,10 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
       <div className="field">
         <label>Cookie（可选，用于绕过人机验证/防护）</label>
         <input value={f.cookie} onChange={(e) => set('cookie', e.target.value)} placeholder="在浏览器通过验证后从开发者工具复制粘贴" />
+      </div>
+      <div className="field">
+        <label>登录令牌 Authorization（可选，V2Board/Xboard 自动重置优先用它，跳过登录以绕过人机验证）</label>
+        <input value={f.auth_token} onChange={(e) => set('auth_token', e.target.value)} placeholder="浏览器登录后从任意接口请求头复制 Authorization 值" />
       </div>
 
       <div className="section-label">节点处理</div>

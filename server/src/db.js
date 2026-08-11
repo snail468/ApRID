@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS airports (
   request_headers TEXT DEFAULT '{}',        -- JSON object
   user_agent      TEXT,                     -- subscription pull User-Agent
   cookie          TEXT,                     -- optional cookie for anti-bot protected panels
+  auth_token      TEXT,                     -- optional Authorization token to skip login on reset
   proxy           TEXT,                     -- optional http/socks proxy for fetching
   group_name      TEXT,
   remark          TEXT,
@@ -137,7 +138,7 @@ function ensureColumns(table, columns) {
     if (!existing.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`);
   }
 }
-ensureColumns('airports', { user_agent: 'TEXT', cookie: 'TEXT' });
+ensureColumns('airports', { user_agent: 'TEXT', cookie: 'TEXT', auth_token: 'TEXT' });
 ensureColumns('users', {
   traffic_base: 'INTEGER', traffic_used: 'INTEGER',
   traffic_limit: 'INTEGER', traffic_updated_at: 'INTEGER',

@@ -3,12 +3,13 @@ import { db } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
 import { fetchAirport } from '../services/airport/fetch.js';
 import { runAirportReset } from '../services/automation.js';
+import { detectPanelType } from '../services/airport/adapters.js';
 
 const router = express.Router();
 router.use(requireAuth);
 
 const FIELDS = ['name', 'url', 'account', 'password', 'sub_url', 'panel_type',
-  'request_headers', 'user_agent', 'cookie', 'proxy', 'group_name', 'remark', 'node_filter',
+  'request_headers', 'user_agent', 'cookie', 'auth_token', 'proxy', 'group_name', 'remark', 'node_filter',
   'expire_at', 'used_traffic', 'total_traffic'];
 
 function normalize(body) {
@@ -28,6 +29,17 @@ function withCounts(ap) {
   const c = db.prepare('SELECT COUNT(*) n FROM nodes WHERE airport_id = ?').get(ap.id);
   return { ...ap, node_count: c.n };
 }
+
+// auto-detect the panel type from a URL (before the airport is saved)
+router.post('/detect', async (req, res) => {
+  const { url, proxy, cookie, user_agent } = req.body || {};
+  try {
+    const r = await detectPanelType(url, { proxy, cookie, userAgent: user_agent });
+    res.json({ ok: true, ...r });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
 
 router.get('/', (req, res) => {
   const rows = db.prepare('SELECT * FROM airports ORDER BY id DESC').all();

@@ -274,7 +274,7 @@ const CLIENTS = [
 
 function SubModal({ user, toast, onClose }) {
   const [data, setData] = useState(null);
-  const [client, setClient] = useState('clash');
+  const [client, setClient] = useState('auto');
   const [qr, setQr] = useState('');
 
   useEffect(() => { API.userSub(user.id).then(setData).catch((e) => toast.error(e.message)); }, [user.id, toast]);
@@ -289,7 +289,7 @@ function SubModal({ user, toast, onClose }) {
     <Modal wide title={`订阅管理 · ${user.name}`} onClose={onClose}
       footer={<button className="btn" onClick={onClose}>关闭</button>}>
       {!data ? <div className="empty"><span className="spin" /></div> : (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 240px', gap: 20 }}>
+        <div className="sub-modal-grid">
           <div>
             <div className="sub-links">
               {CLIENTS.filter((c) => c.k !== 'auto').map((c) => (

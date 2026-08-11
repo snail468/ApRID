@@ -43,11 +43,15 @@ router.get('/:id/sub', (req, res) => {
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!u) return res.status(404).json({ error: '用户不存在' });
   const base = resolveBaseUrl(req);
+  // Append the username as a URL fragment (#name). Clients such as iOS
+  // Shadowrocket read the fragment as the subscription's display name, while
+  // Clash/sing-box ignore it — the panel also serves it via Content-Disposition.
+  const frag = `#${encodeURIComponent(u.name || 'ApRID')}`;
   const links = {};
   for (const [key, fmt] of Object.entries(FORMATS)) {
-    links[key] = { name: fmt.name, url: `${base}/sub/${u.token}?target=${key}` };
+    links[key] = { name: fmt.name, url: `${base}/sub/${u.token}?target=${key}${frag}` };
   }
-  links.auto = { name: '自动 (按客户端)', url: `${base}/sub/${u.token}` };
+  links.auto = { name: '自动 (按客户端)', url: `${base}/sub/${u.token}${frag}` };
   res.json({ token: u.token, name: u.name, links });
 });
 

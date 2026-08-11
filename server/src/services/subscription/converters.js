@@ -289,8 +289,16 @@ function nodeToQuanX(n) {
   }
 }
 
-export function toQuanX(nodes) {
-  return nodes.map(nodeToQuanX).filter(Boolean).join('\n');
+export function toQuanX(nodes, templateContent) {
+  const lines = nodes.map(nodeToQuanX).filter(Boolean);
+  const names = nodes.map((n) => n.name);
+  if (templateContent && templateContent.includes('<PROXIES>')) {
+    return templateContent
+      .replace('<PROXIES>', lines.join('\n'))
+      .replace(/<PROXY_NAMES>/g, names.join(', '));
+  }
+  // default: bare server list (QuantumultX server_remote resource)
+  return lines.join('\n');
 }
 
 // ---------------- Loon ----------------
@@ -313,9 +321,14 @@ function nodeToLoon(n) {
   }
 }
 
-export function toLoon(nodes) {
+export function toLoon(nodes, templateContent) {
   const lines = nodes.map(nodeToLoon).filter(Boolean);
   const names = nodes.map((n) => n.name);
+  if (templateContent && templateContent.includes('<PROXIES>')) {
+    return templateContent
+      .replace('<PROXIES>', lines.join('\n'))
+      .replace(/<PROXY_NAMES>/g, names.join(','));
+  }
   return [
     '[Proxy]',
     ...lines,

@@ -52,6 +52,7 @@ export const API = {
   runTrafficStats: () => api.post('/api/automation/traffic-stats', {}),
   // airports
   airports: () => api.get('/api/airports'),
+  detectPanel: (b) => api.post('/api/airports/detect', b),
   createAirport: (b) => api.post('/api/airports', b),
   updateAirport: (id, b) => api.put(`/api/airports/${id}`, b),
   deleteAirport: (id) => api.del(`/api/airports/${id}`),
