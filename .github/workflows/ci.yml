@@ -52,7 +52,8 @@ jobs:
     name: 构建并推送 Docker 镜像
     runs-on: ubuntu-latest
     needs: [test, web-build]
-    # 仅在推送到 main 时发布镜像；PR 只做构建验证
+    # 仅在打 v* 版本 tag 时构建并发布镜像；分支推送与 PR 不触发
+    if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: read
       packages: write
@@ -63,7 +64,6 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
-        if: github.event_name == 'push'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -75,9 +75,9 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+          # tag 触发：latest 指向最新版本，并生成 x.y.z / x.y / x 版本号镜像
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,format=short
+            type=raw,value=latest
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
@@ -86,7 +86,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: ${{ github.event_name == 'push' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

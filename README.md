@@ -164,17 +164,17 @@ Caddy 会自动申请并续期 Let's Encrypt 证书。
 
 ## CI / 预构建镜像
 
-每次推送到 `main`，GitHub Actions 会自动跑测试、构建前端，并把 Docker 镜像发布到 GHCR：
-`ghcr.io/snail468/aprid:latest`。
+- **每次推送 `main` / PR**：跑后端测试 + 前端构建（不发镜像）。
+- **只有打 `v*` 版本 tag**：才构建并发布 Docker 镜像到 GHCR。
 
-打一个 `v*` 版本 tag 还会额外发布带版本号的镜像：
+发版方式：
 
 ```bash
 git tag v1.0.0 && git push origin v1.0.0
-# 产出 ghcr.io/snail468/aprid:1.0.0 、:1.0 、:1
+# 产出 ghcr.io/snail468/aprid: latest 、1.0.0 、1.0 、1
 ```
 
-服务器上可直接拉取预构建镜像，免本地编译：
+`latest` 始终指向最新发布的版本 tag。服务器上可直接拉取预构建镜像，免本地编译：
 
 ```bash
 docker run -d --name aprid -p 6601:6601 \
