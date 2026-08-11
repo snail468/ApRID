@@ -17,7 +17,35 @@
 | 用户管理 | 用户表：行状态配色（灰=停用 / 红=过期 / 黄=≤3天到期）；多格式订阅、扫码导入、到期切断、重置订阅 |
 | 订阅模板 | 自定义模板，按客户端类型（Clash / v2rayN / Shadowrocket…）下发 |
 
-## 快速开始（Docker 一键部署）
+## 一键部署（服务器拉取镜像并启动，推荐）
+
+在已装好 Docker 的服务器上，**一条命令**拉取预构建镜像并启动（升级时再跑一次即可，配置和数据都保留）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/snail468/ApRID/main/deploy.sh | bash
+```
+
+或手动一条 `docker run`（把密码换成自己的；`JWT_SECRET` 自动随机生成）：
+
+```bash
+mkdir -p ~/aprid/data && docker rm -f aprid 2>/dev/null; docker run -d --name aprid \
+  --restart unless-stopped --pull always -p 6601:6601 \
+  -e ADMIN_USERNAME=admin \
+  -e ADMIN_PASSWORD='换成强密码' \
+  -e JWT_SECRET="$(openssl rand -hex 32)" \
+  -v ~/aprid/data:/data \
+  ghcr.io/snail468/aprid:latest
+```
+
+脚本 [deploy.sh](deploy.sh) 首次运行会在 `~/aprid/aprid.env` 生成随机管理员密码与 JWT 密钥并打印出来；之后重复运行即为升级（`--pull always` 拉最新镜像、重建容器，`~/aprid/data` 数据不变）。
+
+> 上面的 `curl | bash` 需要仓库为 Public。若仓库是 Private，改用：`git clone https://github.com/snail468/ApRID.git && bash ApRID/deploy.sh`。
+
+> 前提：服务器已装 Docker，且云安全组已放行 TCP 6601。若镜像拉取报 401，说明 GHCR 包还是 Private——见下方教程「常见问题」。
+
+访问 `http://<服务器公网IP>:6601`，用打印出的管理员账号登录，**首次登录后请到「设置」改密码并开启两步验证**。
+
+## 用 compose 部署（源码构建）
 
 ```bash
 cp .env.example .env
