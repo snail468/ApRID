@@ -1,5 +1,5 @@
 # ---------- Stage 1: build frontend ----------
-FROM node:20-alpine AS web
+FROM node:20-slim AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json* ./
 RUN npm install
@@ -7,16 +7,19 @@ COPY web/ ./
 RUN npm run build
 
 # ---------- Stage 2: install server deps ----------
-FROM node:20-alpine AS server-deps
+# Use a glibc base (Debian slim), NOT alpine/musl — better-sqlite3's native
+# binary must match the runtime libc, otherwise the process segfaults (exit 139).
+FROM node:20-slim AS server-deps
 WORKDIR /app
 COPY server/package.json server/package-lock.json* ./
-# better-sqlite3 needs build toolchain on alpine
-RUN apk add --no-cache python3 make g++ \
+# build toolchain for better-sqlite3 (node-gyp fallback if no matching prebuild)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 make g++ \
     && npm install --omit=dev \
-    && apk del python3 make g++
+    && rm -rf /var/lib/apt/lists/*
 
 # ---------- Stage 3: runtime ----------
-FROM node:20-alpine AS runtime
+FROM node:20-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=6601
