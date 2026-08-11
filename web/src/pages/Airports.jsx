@@ -4,6 +4,7 @@ import { Modal, useConfirm, copyText, fmtBytes, fmtDate, daysLeft, toDatetimeLoc
 import { useTable, SortTh } from '../hooks/useTable.jsx';
 
 const PANEL_TYPES = [
+  { v: 'generic', l: '通用 (自动识别)' },
   { v: 'sspanel', l: 'SSPanel-Uim' },
   { v: 'v2board', l: 'V2Board' },
   { v: 'xboard', l: 'Xboard' },
@@ -116,7 +117,7 @@ export default function Airports({ toast }) {
                     <td><span className="badge blue">{a.panel_type}</span></td>
                     <td>{a.node_count}</td>
                     <td>{expireCell(a.expire_at)}</td>
-                    <td className="small muted">{a.used_traffic != null ? `${fmtBytes(a.used_traffic)}/${fmtBytes(a.total_traffic)}` : '-'}</td>
+                    <td><UsageCell used={a.used_traffic} total={a.total_traffic} /></td>
                     <td>{a.group_name || '-'}</td>
                     <td className="actions">
                       <button className="btn sm" disabled={busy[a.id]} onClick={() => doFetch(a.id)}>{busy[a.id] === 'fetch' ? <span className="spin" /> : '拉取'}</button>
@@ -139,6 +140,7 @@ export default function Airports({ toast }) {
             <div className="mrow"><span className="k">账户</span><span className="mono">{a.account || '-'}</span></div>
             <div className="mrow"><span className="k">节点</span><span>{a.node_count}</span></div>
             <div className="mrow"><span className="k">到期</span>{expireCell(a.expire_at)}</div>
+            <div className="mrow"><span className="k">用量</span><UsageCell used={a.used_traffic} total={a.total_traffic} /></div>
             <div className="btn-row" style={{ marginTop: 10 }}>
               <button className="btn sm" onClick={() => doFetch(a.id)}>拉取</button>
               <button className="btn sm" onClick={() => doReset(a.id)}>重置</button>
@@ -160,6 +162,25 @@ function expireCell(ms) {
   const d = daysLeft(ms);
   const cls = d < 0 ? 'red' : d <= 3 ? 'yellow' : 'green';
   return <span className={`badge ${cls}`}>{fmtDate(ms)}{d >= 0 ? ` (${d}天)` : ' 已过期'}</span>;
+}
+
+// 到期用量信息：已用 / 总量 进度条 + 剩余
+function UsageCell({ used, total }) {
+  if (used == null && total == null) return <span className="muted">-</span>;
+  const u = Number(used || 0);
+  const t = Number(total || 0);
+  const pct = t > 0 ? Math.min(100, Math.round((u / t) * 100)) : 0;
+  const remaining = t > 0 ? Math.max(0, t - u) : null;
+  const cls = pct >= 90 ? 'red' : pct >= 70 ? 'yellow' : 'green';
+  return (
+    <div style={{ minWidth: 130 }}>
+      <div className="usage-bar"><span className={`usage-fill ${cls}`} style={{ width: `${pct}%` }} /></div>
+      <div className="small muted" style={{ marginTop: 3 }}>
+        {fmtBytes(u)} / {t > 0 ? fmtBytes(t) : '不限'}
+        {remaining != null && <span> · 余 {fmtBytes(remaining)}</span>}
+      </div>
+    </div>
+  );
 }
 
 function AirportModal({ airport, toast, onClose, onSaved }) {

@@ -115,6 +115,27 @@ async function sspanelReset(ap) {
   return { subUrl };
 }
 
+// ---------------- Generic (auto-detect) ----------------
+// Best-effort universal reset: probe the two dominant panel families in turn
+// and use whichever login succeeds. Suitable when the panel type is unknown or
+// a lightly-modified fork. Collects each attempt's error for diagnostics.
+async function genericReset(ap) {
+  const attempts = [
+    ['V2Board/Xboard', v2boardReset],
+    ['SSPanel', sspanelReset],
+  ];
+  const errors = [];
+  for (const [label, fn] of attempts) {
+    try {
+      const r = await fn(ap);
+      if (r?.subUrl) return { ...r, detected: label };
+    } catch (err) {
+      errors.push(`${label}: ${err.message}`);
+    }
+  }
+  throw new Error(`通用适配器未能识别面板类型，尝试记录：\n${errors.join('\n')}`);
+}
+
 export async function resetAirportSubscription(ap) {
   if (!ap.url) throw new Error('机场未配置网址');
   if (!ap.account || !ap.password) throw new Error('机场未配置登录账号或密码');
@@ -124,7 +145,9 @@ export async function resetAirportSubscription(ap) {
       return v2boardReset(ap);
     case 'sspanel':
       return sspanelReset(ap);
+    case 'generic':
+      return genericReset(ap);
     default:
-      throw new Error(`不支持的面板类型：${ap.panel_type}（可选 v2board / xboard / sspanel）`);
+      throw new Error(`不支持的面板类型：${ap.panel_type}（可选 generic / v2board / xboard / sspanel）`);
   }
 }
