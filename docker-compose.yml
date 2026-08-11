@@ -1,7 +1,9 @@
 services:
   aprid:
-    build: .
-    image: aprid:latest
+    # 默认拉取 Actions 构建好的预构建镜像：docker compose pull && docker compose up -d
+    image: ghcr.io/snail468/aprid:latest
+    # 如需改为从源码本地构建，取消下一行注释，并改用：docker compose up -d --build
+    # build: .
     container_name: aprid
     restart: unless-stopped
     ports:
