@@ -7,12 +7,14 @@ COPY web/ ./
 RUN npm run build
 
 # ---------- Stage 2: install server deps ----------
-# Use a glibc base (Debian slim), NOT alpine/musl — better-sqlite3's native
-# binary must match the runtime libc, otherwise the process segfaults (exit 139).
+# Use a glibc base (Debian slim), NOT alpine/musl.
+# better-sqlite3's downloaded prebuilt binary loads but SEGFAULTS on actual
+# SQLite calls on some CPUs (exit 139). Force compiling it FROM SOURCE against
+# this exact Node/glibc so the native binary is fully compatible everywhere.
 FROM node:20-slim AS server-deps
 WORKDIR /app
 COPY server/package.json server/package-lock.json* ./
-# build toolchain for better-sqlite3 (node-gyp fallback if no matching prebuild)
+ENV npm_config_build_from_source=true
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 make g++ \
     && npm install --omit=dev \
