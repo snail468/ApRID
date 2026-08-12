@@ -54,12 +54,13 @@ export default function Automation({ toast }) {
   const clearTasks = async () => { await API.clearTasks(); loadTasks(); };
 
   const airports = overview?.airports || [];
+  const metaOf = (key) => overview?.automations?.find((x) => x.key === key);
 
   return (
     <>
       <div className="page-head"><h1>自动化</h1></div>
       <p className="muted small" style={{ marginTop: -8 }}>
-        所有自动化任务均需在此显式运行；运行过程与报错见下方任务日志。
+        所有自动化任务均需在此显式运行；每个任务的自动触发条件见下方卡片，运行过程与报错见任务日志。
       </p>
 
       <div className="auto-grid">
@@ -67,6 +68,7 @@ export default function Automation({ toast }) {
         <div className="card">
           <h3 style={{ marginTop: 0 }}>🔄 机场订阅自动重置</h3>
           <p className="muted small">后台登录机场 → 重置订阅 → 回填链接 → 拉取一次。</p>
+          <TriggerInfo meta={metaOf('airport_reset')} />
           <div className="btn-row" style={{ marginBottom: 12 }}>
             <button className="btn primary" disabled={running === 'airport_reset'} onClick={() => runAirportReset()}>
               {running === 'airport_reset' ? <span className="spin" /> : '▶ 全部机场'}
@@ -94,6 +96,7 @@ export default function Automation({ toast }) {
             按机场账户用量估算每个用户已用流量（B−A），达到「流量上限」的用户订阅将自动切断。
             首次运行仅建立基线（A）。
           </p>
+          <TriggerInfo meta={metaOf('traffic_stats')} />
           <button className="btn primary" disabled={running === 'traffic_stats'} onClick={runTraffic}>
             {running === 'traffic_stats' ? <span className="spin" /> : '▶ 立即统计'}
           </button>
@@ -110,13 +113,14 @@ export default function Automation({ toast }) {
         {tasks.length === 0 ? <div className="muted small" style={{ marginTop: 12 }}>暂无任务记录</div> : (
           <div className="table-wrap" style={{ marginTop: 12 }}>
             <table>
-              <thead><tr><th>#</th><th>类型</th><th>状态</th><th>开始</th><th>结束</th><th>日志</th></tr></thead>
+              <thead><tr><th>#</th><th>类型</th><th>目标</th><th>状态</th><th>开始</th><th>结束</th><th>日志</th></tr></thead>
               <tbody>
                 {tasks.map((t) => (
                   <Fragment key={t.id}>
                     <tr>
                       <td>{t.id}</td>
                       <td>{TASK_LABEL[t.type] || t.type}</td>
+                      <td className="small">{t.ref_name || <span className="muted">-</span>}</td>
                       <td><span className={`badge ${STATUS_BADGE[t.status] || 'gray'}`}>{t.status === 'running' ? <><span className="spin" /> 运行中</> : t.status}</span></td>
                       <td className="muted small">{fmtDateTime(t.created_at)}</td>
                       <td className="muted small">{t.finished_at ? fmtDateTime(t.finished_at) : '-'}</td>
@@ -124,7 +128,7 @@ export default function Automation({ toast }) {
                     </tr>
                     {openLog === t.id && (
                       <tr>
-                        <td colSpan={6}><pre className="task-log">{t.log || '（无日志）'}</pre></td>
+                        <td colSpan={7}><pre className="task-log">{t.log || '（无日志）'}</pre></td>
                       </tr>
                     )}
                   </Fragment>
@@ -135,6 +139,23 @@ export default function Automation({ toast }) {
         )}
       </div>
     </>
+  );
+}
+
+function TriggerInfo({ meta }) {
+  if (!meta) return null;
+  return (
+    <div className="trigger-info">
+      <div className="small"><strong>自动触发条件</strong></div>
+      {meta.autoTriggers && meta.autoTriggers.length > 0 ? (
+        <ul className="trigger-list">
+          {meta.autoTriggers.map((line, i) => <li key={i} className="muted small">{line}</li>)}
+        </ul>
+      ) : (
+        <div className="muted small">无自动触发条件</div>
+      )}
+      {meta.schedule && <div className="muted small" style={{ marginTop: 2 }}>⏱ 定时：{meta.schedule}</div>}
+    </div>
   );
 }
 

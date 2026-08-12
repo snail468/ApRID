@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import QRCode from 'qrcode';
 import { API } from '../api.js';
 import { Modal, useConfirm, copyText, fmtBytes, fmtDate, daysLeft, toDatetimeLocal, fromDatetimeLocal } from '../ui.jsx';
@@ -19,12 +19,41 @@ export default function Users({ toast }) {
   const { data: groups = [], refresh: refreshGroups } = useCachedResource('groups:user', () => API.groups('user'));
   const [editing, setEditing] = useState(null);
   const [subUser, setSubUser] = useState(null);
+  const [previewUser, setPreviewUser] = useState(null);
   const [showGroups, setShowGroups] = useState(false);
   const [batchGroup, setBatchGroup] = useState('');
+  const [airportFilter, setAirportFilter] = useState('');
   const [confirm, confirmNode] = useConfirm();
 
   const load = () => refresh();
-  const t = useTable(rows, { searchKeys: ['name', 'group_name', 'remark'], initialSort: { key: 'id', dir: 'desc' } });
+
+  // airportId -> [{id,name}] of users that explicitly受下发 this airport.
+  // Used both by the airport filter and by the "隐藏已下发机场" toggle.
+  const assignedByAirport = useMemo(() => {
+    const m = new Map();
+    for (const u of rows) {
+      const aps = safeParse(u.node_filter).airports;
+      if (!Array.isArray(aps)) continue;
+      for (const id of aps) {
+        if (!m.has(id)) m.set(id, []);
+        m.get(id).push({ id: u.id, name: u.name });
+      }
+    }
+    return m;
+  }, [rows]);
+
+  // rows narrowed by the "按关联机场筛选" dropdown before search/sort.
+  // A user with an empty airport list receives *all* airports, so they match any.
+  const viewRows = useMemo(() => {
+    if (!airportFilter) return rows;
+    const id = Number(airportFilter);
+    return rows.filter((u) => {
+      const aps = safeParse(u.node_filter).airports;
+      return !Array.isArray(aps) || aps.length === 0 || aps.includes(id);
+    });
+  }, [rows, airportFilter]);
+
+  const t = useTable(viewRows, { searchKeys: ['name', 'group_name', 'remark'], initialSort: { key: 'id', dir: 'desc' } });
 
   const del = async (id) => { if (await confirm('删除该用户？其订阅将立即失效。')) { await API.deleteUser(id); load(); } };
   const reset = async (u) => {
@@ -65,6 +94,10 @@ export default function Users({ toast }) {
         <select style={{ width: 130 }} value={t.filters.group_name || ''} onChange={(e) => t.setFilters((f) => ({ ...f, group_name: e.target.value }))}>
           <option value="">全部分组</option>
           {groups.map((g) => <option key={g.id} value={g.name}>{g.name}</option>)}
+        </select>
+        <select style={{ width: 160 }} value={airportFilter} onChange={(e) => setAirportFilter(e.target.value)} title="按关联机场筛选">
+          <option value="">全部关联机场</option>
+          {airports.map((a) => <option key={a.id} value={a.id}>{a.name}{a.account ? ` / ${a.account}` : ''}</option>)}
         </select>
         <div className="spacer" />
         {t.selected.size > 0 && (
@@ -111,6 +144,7 @@ export default function Users({ toast }) {
                     <td className="small muted">{u.remark || '-'}</td>
                     <td className="actions">
                       <button className="btn sm primary" onClick={() => setSubUser(u)}>订阅</button>
+                      <button className="btn sm" onClick={() => setPreviewUser(u)} title="预览客户端可拉取的节点">节点预览</button>
                       <button className="btn sm" onClick={() => setEditing(u)}>编辑</button>
                       <button className="btn sm" onClick={() => reset(u)} title="重置订阅">重置</button>
                       <button className="btn sm danger" onClick={() => del(u.id)}>删</button>
@@ -131,6 +165,7 @@ export default function Users({ toast }) {
             <div className="mrow"><span className="k">分组</span><span>{u.group_name || '-'}</span></div>
             <div className="btn-row" style={{ marginTop: 10 }}>
               <button className="btn sm primary" onClick={() => setSubUser(u)}>订阅</button>
+              <button className="btn sm" onClick={() => setPreviewUser(u)}>节点预览</button>
               <button className="btn sm" onClick={() => setEditing(u)}>编辑</button>
               <button className="btn sm" onClick={() => reset(u)}>重置</button>
               <button className="btn sm danger" onClick={() => del(u.id)}>删</button>
@@ -140,8 +175,10 @@ export default function Users({ toast }) {
       </div>
 
       {editing && <UserModal user={editing} templates={templates} airports={airports} groups={groups} toast={toast}
+        assignedByAirport={assignedByAirport}
         onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); refreshGroups(); }} />}
       {subUser && <SubModal user={subUser} toast={toast} onClose={() => setSubUser(null)} />}
+      {previewUser && <PreviewModal user={previewUser} toast={toast} onClose={() => setPreviewUser(null)} />}
       {showGroups && <GroupManagerModal kind="user" title="用户分组管理" toast={toast} onClose={() => setShowGroups(false)} onChanged={() => { refreshGroups(); load(); }} />}
       {confirmNode}
     </>
@@ -169,7 +206,7 @@ function TrafficCell({ used, limit }) {
 }
 
 /* ---------------- User edit modal ---------------- */
-function UserModal({ user, templates, airports, groups, toast, onClose, onSaved }) {
+function UserModal({ user, templates, airports, groups, toast, assignedByAirport, onClose, onSaved }) {
   const isNew = !user.id;
   const uf = safeParse(user.node_filter);
   const [f, setF] = useState({
@@ -179,6 +216,7 @@ function UserModal({ user, templates, airports, groups, toast, onClose, onSaved 
     traffic_limit_gb: user.traffic_limit ? (user.traffic_limit / GB) : '',
     airports: uf.airports || [], include: uf.include || '', exclude: uf.exclude || '', prefix: uf.prefix || '',
     protocols: uf.protocols || [], excludeProtocols: uf.excludeProtocols || [],
+    maxLatency: uf.maxLatency ?? '',
   });
   const [saving, setSaving] = useState(false);
   const [hideAssigned, setHideAssigned] = useState(false);
@@ -195,6 +233,7 @@ function UserModal({ user, templates, airports, groups, toast, onClose, onSaved 
       include: f.include || undefined, exclude: f.exclude || undefined, prefix: f.prefix || undefined,
       protocols: f.protocols.length ? f.protocols : undefined,
       excludeProtocols: f.excludeProtocols.length ? f.excludeProtocols : undefined,
+      maxLatency: f.maxLatency === '' ? undefined : Number(f.maxLatency),
     });
     const body = {
       name: f.name, enabled: f.enabled, expire_at: fromDatetimeLocal(f.expire_at),
@@ -207,7 +246,12 @@ function UserModal({ user, templates, airports, groups, toast, onClose, onSaved 
     } catch (e) { toast.error(e.message); } finally { setSaving(false); }
   };
 
-  const visibleAirports = hideAssigned ? airports.filter((a) => !f.airports.includes(a.id)) : airports;
+  // "隐藏已下发机场" hides airports that have already been下发给过*任一其他用户*
+  // (so the same机场账户 isn't double-dispatched) — NOT the airports this user
+  // currently has selected. The current user's own picks stay visible & checked.
+  const assignedToOthers = (airportId) =>
+    (assignedByAirport?.get(airportId) || []).some((u) => u.id !== user.id);
+  const visibleAirports = hideAssigned ? airports.filter((a) => !assignedToOthers(a.id)) : airports;
 
   return (
     <Modal wide title={isNew ? '新增用户' : `编辑用户 · ${user.name}`} onClose={onClose}
@@ -241,16 +285,22 @@ function UserModal({ user, templates, airports, groups, toast, onClose, onSaved 
       <div className="field">
         <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>下发机场（不选=全部；同机场不同账户视为不同项）</span>
-          <button type="button" className="btn sm" onClick={() => setHideAssigned((v) => !v)}>{hideAssigned ? '显示全部' : '隐藏已下发机场'}</button>
+          <button type="button" className="btn sm" onClick={() => setHideAssigned((v) => !v)} title="隐藏此前已下发给其他任一用户的机场">
+            {hideAssigned ? '显示全部' : '隐藏已下发机场'}
+          </button>
         </label>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          {visibleAirports.map((a) => (
-            <label key={a.id} className="chip-check">
-              <input type="checkbox" checked={f.airports.includes(a.id)} onChange={() => toggleAirport(a.id)} />
-              {a.name}{a.account ? <span className="muted"> / {a.account}</span> : ''}
-            </label>
-          ))}
-          {visibleAirports.length === 0 && <span className="muted small">{hideAssigned ? '已全部下发' : '暂无机场'}</span>}
+          {visibleAirports.map((a) => {
+            const others = (assignedByAirport?.get(a.id) || []).filter((u) => u.id !== user.id);
+            return (
+              <label key={a.id} className="chip-check" title={others.length ? `已下发给：${others.map((u) => u.name).join('、')}` : ''}>
+                <input type="checkbox" checked={f.airports.includes(a.id)} onChange={() => toggleAirport(a.id)} />
+                {a.name}{a.account ? <span className="muted"> / {a.account}</span> : ''}
+                {others.length > 0 && <span className="badge gray" style={{ marginLeft: 4 }}>已下发{others.length}</span>}
+              </label>
+            );
+          })}
+          {visibleAirports.length === 0 && <span className="muted small">{hideAssigned ? '所有机场都已下发给其他用户' : '暂无机场'}</span>}
         </div>
       </div>
 
@@ -260,8 +310,66 @@ function UserModal({ user, templates, airports, groups, toast, onClose, onSaved 
       </div>
       <div className="field"><label>包含节点（按协议，不勾=全部）</label><ProtocolPicker value={f.protocols} onChange={(v) => set('protocols', v)} /></div>
       <div className="field"><label>排除节点（按协议）</label><ProtocolPicker value={f.excludeProtocols} onChange={(v) => set('excludeProtocols', v)} /></div>
+      <div className="field">
+        <label>延迟上限 (ms，留空=不限；填 0=仅排除超时节点)</label>
+        <input type="number" min="0" step="1" value={f.maxLatency} onChange={(e) => set('maxLatency', e.target.value)} placeholder="如 200" />
+        <div className="muted small" style={{ marginTop: 4 }}>
+          超过上限或已超时的节点将被排除（依据「节点管理」中检测到的真实延迟；未检测的节点保留）。
+        </div>
+      </div>
       <div className="field"><label>节点名前缀</label><input value={f.prefix} onChange={(e) => set('prefix', e.target.value)} /></div>
       <div className="field"><label>备注</label><input value={f.remark} onChange={(e) => set('remark', e.target.value)} /></div>
+    </Modal>
+  );
+}
+
+/* ---------------- Node preview modal ---------------- */
+function PreviewModal({ user, toast, onClose }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    API.userPreview(user.id).then(setData).catch((e) => { setErr(e); toast.error(e.message); });
+  }, [user.id, toast]);
+
+  const latCell = (ms) => {
+    if (ms == null) return <span className="muted">未测</span>;
+    if (ms < 0) return <span className="badge red">超时</span>;
+    const cls = ms < 200 ? 'green' : ms < 500 ? 'yellow' : 'red';
+    return <span className={`badge ${cls}`}>{ms} ms</span>;
+  };
+
+  return (
+    <Modal wide title={`节点预览 · ${user.name}`} onClose={onClose}
+      footer={<button className="btn" onClick={onClose}>关闭</button>}>
+      {err ? <div className="empty">加载失败：{err.message}</div>
+        : !data ? <div className="empty"><span className="spin" /></div>
+        : (
+          <>
+            <p className="muted small" style={{ marginTop: 0 }}>
+              以下为该用户客户端实际能拉取到的节点（已应用协议/名称/延迟等所有筛选）。
+              {data.notice ? <> 当前状态：<strong>{data.notice}</strong>，客户端只会收到一条提示节点。</>
+                : <> 共 <strong>{data.count}</strong> 个节点。</>}
+            </p>
+            {data.notice ? <div className="empty">{data.notice}</div> : (
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>#</th><th>名称</th><th>协议</th><th>服务器</th><th>延迟</th></tr></thead>
+                  <tbody>
+                    {data.nodes.map((n, i) => (
+                      <tr key={i}>
+                        <td className="muted small">{i + 1}</td>
+                        <td>{n.name}</td>
+                        <td><span className="badge blue">{n.type}</span></td>
+                        <td className="muted small">{n.server}:{n.port}</td>
+                        <td>{latCell(n.latency)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
     </Modal>
   );
 }

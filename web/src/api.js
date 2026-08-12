@@ -75,6 +75,7 @@ export const API = {
   batchToggleUsers: (ids, enabled) => api.post('/api/users/batch/toggle', { ids, enabled }),
   batchGroupUsers: (ids, group_name) => api.post('/api/users/batch/group', { ids, group_name }),
   userSub: (id) => api.get(`/api/users/${id}/sub`),
+  userPreview: (id) => api.get(`/api/users/${id}/preview`),
   resetUser: (id, b) => api.post(`/api/users/${id}/reset`, b),
   // templates
   templates: () => api.get('/api/templates'),

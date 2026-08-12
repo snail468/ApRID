@@ -200,6 +200,11 @@ tr.row-active   { box-shadow: inset 3px 0 0 transparent; }
   word-break: break-all; max-height: 320px; overflow-y: auto; margin: 0; color: var(--text-dim);
 }
 .usage-inline { min-width: 120px; }
+.trigger-info {
+  margin: 8px 0 12px; padding: 8px 10px; border: 1px dashed var(--border);
+  border-radius: 8px; background: var(--bg);
+}
+.trigger-list { margin: 4px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
 
 @media (max-width: 860px) { .auto-grid { grid-template-columns: 1fr; } }
 @media (max-width: 640px) { .sub-modal-grid { grid-template-columns: 1fr; } }

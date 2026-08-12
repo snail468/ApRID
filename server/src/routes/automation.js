@@ -12,8 +12,26 @@ router.get('/', (req, res) => {
   const airports = db.prepare('SELECT id, name, group_name, account, sub_url, last_fetch_at FROM airports ORDER BY id DESC').all();
   res.json({
     automations: [
-      { key: 'airport_reset', name: '机场订阅自动重置', last: last('airport_reset') },
-      { key: 'traffic_stats', name: '用户流量统计', last: last('traffic_stats') },
+      {
+        key: 'airport_reset',
+        name: '机场订阅自动重置',
+        last: last('airport_reset'),
+        // Explicit trigger conditions surfaced on the panel:
+        manual: true,
+        autoTriggers: [
+          '用户点击「重置订阅」时，自动重置该用户下发的所有机场',
+          '用户到期后重置订阅时同样自动触发',
+        ],
+        schedule: '无定时任务：不会每天自动运行，需在此页显式运行',
+      },
+      {
+        key: 'traffic_stats',
+        name: '用户流量统计',
+        last: last('traffic_stats'),
+        manual: true,
+        autoTriggers: [],
+        schedule: '无定时任务：目前不会每天自动触发，需在此页显式点击「立即统计」运行',
+      },
     ],
     airports,
   });

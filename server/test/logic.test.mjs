@@ -1,7 +1,8 @@
 // Self-contained logic tests (no DB / no network) — run in CI via `npm test`.
 import { parseSubscription, parseUri, parseUserInfo } from '../src/services/nodeParser.js';
-import { processAirportNodes } from '../src/services/nodeProcess.js';
+import { processAirportNodes, filterNodes } from '../src/services/nodeProcess.js';
 import { toBase64, toClash, toSingbox, toSurge, toQuanX, toLoon, detectFormat } from '../src/services/subscription/converters.js';
+import { DEFAULT_TEMPLATES } from '../src/services/subscription/defaultTemplates.js';
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) pass++; else { fail++; console.log('  ✗ FAIL:', m); } };
@@ -79,6 +80,37 @@ ok(toLoon(nodes).includes('[Proxy]'), 'toLoon');
 const tpl = 'proxies: []\nproxy-groups:\n  - name: G\n    type: select\n    proxies: [<PROXIES>]\n';
 const out = toClash(nodes, tpl);
 ok(!out.includes('<PROXIES>'), 'clash template placeholder replaced');
+
+// --- maxLatency filter ---
+const latNodes = [
+  { name: 'fast', type: 'ss', server: 'a', port: 1, raw: {}, latency: 80 },
+  { name: 'slow', type: 'ss', server: 'b', port: 2, raw: {}, latency: 350 },
+  { name: 'timeout', type: 'ss', server: 'c', port: 3, raw: {}, latency: -1 },
+  { name: 'untested', type: 'ss', server: 'd', port: 4, raw: {}, latency: null },
+];
+ok(filterNodes(latNodes, {}).length === 4, 'maxLatency off keeps all');
+// 0 = only drop timed-out nodes
+const lat0 = filterNodes(latNodes, { maxLatency: 0 }).map((n) => n.name);
+ok(lat0.length === 3 && !lat0.includes('timeout'), `maxLatency 0 drops only timeout -> ${lat0.join(',')}`);
+// >0 = drop timeout + over ceiling, keep untested
+const lat200 = filterNodes(latNodes, { maxLatency: 200 }).map((n) => n.name);
+ok(lat200.includes('fast') && lat200.includes('untested') && !lat200.includes('slow') && !lat200.includes('timeout'),
+  `maxLatency 200 -> ${lat200.join(',')}`);
+
+// --- default templates preserve standard routing rules & render ---
+ok(DEFAULT_TEMPLATES.clash.content.includes('RULE-SET,Telegram,📲 电报信息'), 'clash default keeps ACL4SSR Telegram rule');
+ok(DEFAULT_TEMPLATES.clash.content.includes('rule-providers'), 'clash default keeps rule-providers');
+const clashRendered = toClash(nodes, DEFAULT_TEMPLATES.clash.content);
+ok(!clashRendered.includes('<PROXIES>') && clashRendered.includes('📲 电报信息'), 'clash default template renders w/ groups');
+const sbRendered = JSON.parse(toSingbox(nodes, DEFAULT_TEMPLATES.singbox.content));
+ok(sbRendered.outbounds.some((o) => o.tag === '💬 AI 平台') && sbRendered.route.rules.length > 3, 'singbox default keeps AI group + route rules');
+ok(!JSON.stringify(sbRendered).includes('<PROXIES>'), 'singbox default placeholder replaced');
+const surgeRendered = toSurge(nodes, DEFAULT_TEMPLATES.surge.content);
+ok(surgeRendered.includes('RULE-SET,') && surgeRendered.includes('📲 电报信息') && !surgeRendered.includes('<PROXY_NAMES>'), 'surge default keeps RULE-SET rules');
+const loonRendered = toLoon(nodes, DEFAULT_TEMPLATES.loon.content);
+ok(loonRendered.includes('[Remote Rule]') && !loonRendered.includes('<PROXIES>'), 'loon default keeps remote rules');
+const quanRendered = toQuanX(nodes, DEFAULT_TEMPLATES.quantumultx.content);
+ok(quanRendered.includes('[filter_remote]') && !quanRendered.includes('<PROXY_NAMES>'), 'quanx default keeps filter_remote');
 
 // --- UA detection ---
 ok(detectFormat('ClashMetaForAndroid/2.10') === 'clash', 'detect clash UA');

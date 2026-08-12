@@ -29,11 +29,12 @@ export default function Dashboard() {
           ? <div className="muted small">暂无任务记录</div>
           : (
             <table>
-              <thead><tr><th>类型</th><th>状态</th><th>时间</th></tr></thead>
+              <thead><tr><th>类型</th><th>目标</th><th>状态</th><th>时间</th></tr></thead>
               <tbody>
                 {stats.recentTasks.map((t) => (
                   <tr key={t.id}>
                     <td>{taskLabel(t.type)}</td>
+                    <td className="small">{t.ref_name || <span className="muted">-</span>}</td>
                     <td><span className={`badge ${statusColor(t.status)}`}>{t.status}</span></td>
                     <td className="muted small">{fmtDateTime(t.created_at)}</td>
                   </tr>

@@ -3,7 +3,7 @@ import { nanoid } from 'nanoid';
 import { db } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
 import { config, resolveBaseUrl } from '../config.js';
-import { userStatus } from '../services/subscription/build.js';
+import { userStatus, collectUserNodes } from '../services/subscription/build.js';
 import { FORMATS } from '../services/subscription/converters.js';
 import { runUserTriggeredReset } from '../services/automation.js';
 
@@ -53,6 +53,24 @@ router.get('/:id/sub', (req, res) => {
   }
   links.auto = { name: '自动 (按客户端)', url: `${base}/sub/${u.token}${frag}` };
   res.json({ token: u.token, name: u.name, links });
+});
+
+// Node preview: the exact nodes this user's client would pull after all
+// filtering (protocol / name / latency limit / rename / dedup).
+router.get('/:id/preview', (req, res) => {
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!u) return res.status(404).json({ error: '用户不存在' });
+  const status = userStatus(u);
+  let nodes = [];
+  let notice = null;
+  if (status === 'disabled') notice = '订阅已停用';
+  else if (status === 'expired') notice = '已到期，请续费';
+  else if (status === 'exhausted') notice = '流量已用完，请续费';
+  else {
+    nodes = collectUserNodes(u).map((n) => ({ name: n.name, type: n.type, server: n.server, port: n.port, latency: n.latency }));
+    if (!nodes.length) notice = '暂无可用节点';
+  }
+  res.json({ status, notice, count: nodes.length, nodes });
 });
 
 router.post('/', (req, res) => {
