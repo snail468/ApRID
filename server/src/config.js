@@ -18,6 +18,13 @@ export const config = {
   sessionHours: parseInt(process.env.SESSION_HOURS || '24', 10),
   publicDir: path.join(__dirname, '..', 'public'),
   isProd: process.env.NODE_ENV === 'production',
+  // Browser-mode airport reset: default CDP endpoint of a side-car browser
+  // (the optional `browserless` service in docker-compose). Airports can
+  // override this per-airport. Used only when an airport's reset_mode='browser'.
+  browserCdpEndpoint: process.env.BROWSER_CDP_ENDPOINT || 'http://browserless:3000',
+  // Optional captcha-solver placeholder (not wired yet — reserved interface).
+  captchaProvider: process.env.CAPTCHA_PROVIDER || '',   // e.g. 'capsolver' | 'yescaptcha'
+  captchaApiKey: process.env.CAPTCHA_API_KEY || '',
 };
 
 // resolve the public base url for a given request (fallback to Host header)

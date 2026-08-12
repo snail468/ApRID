@@ -10,7 +10,7 @@ router.use(requireAuth);
 
 const FIELDS = ['name', 'url', 'account', 'password', 'sub_url', 'panel_type',
   'request_headers', 'user_agent', 'cookie', 'auth_token', 'proxy', 'group_name', 'remark', 'node_filter',
-  'expire_at', 'used_traffic', 'total_traffic'];
+  'expire_at', 'used_traffic', 'total_traffic', 'reset_mode', 'cdp_endpoint'];
 
 function normalize(body) {
   const out = {};

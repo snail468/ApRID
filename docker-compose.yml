@@ -13,11 +13,29 @@ services:
     environment:
       - PORT=6601
       - DB_PATH=/data/aprid.db
+      # 浏览器模式（机场自动重置绕过 CF/签名）默认连接下方 browserless 侧车。
+      # 不需要浏览器模式时，可删掉 browserless 服务，此项留着也无害。
+      - BROWSER_CDP_ENDPOINT=http://browserless:3000
     volumes:
       - ./data:/data
+    # depends_on 不强制，browserless 仅在机场选择「浏览器模式」时才会被用到
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:6601/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  # 可选：无头 Chromium 侧车，供「机场自动重置 · 浏览器模式」通过 CDP 接管。
+  # 只在需要绕过 Cloudflare / 接口签名的机场才用得到；用不到可整段删除。
+  # 不对公网暴露端口，仅 aprid 通过内部网络访问。
+  browserless:
+    image: ghcr.io/browserless/chromium:latest
+    container_name: aprid-browserless
+    restart: unless-stopped
+    environment:
+      - CONCURRENT=2
+      - TIMEOUT=60000
+      # 如需外部访问可设置 TOKEN，并在机场「CDP 端点」里带上 ?token=...
+    # ports:
+    #   - "3000:3000"   # 默认不暴露；仅当你要从外部连它时再打开

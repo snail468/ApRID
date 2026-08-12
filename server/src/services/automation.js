@@ -27,9 +27,9 @@ export async function runAirportReset(airportId) {
   try {
     const ap = db.prepare('SELECT * FROM airports WHERE id = ?').get(airportId);
     if (!ap) throw new Error('机场不存在');
-    appendLog(taskId, `开始重置机场「${ap.name}」订阅 (${ap.panel_type})`);
+    appendLog(taskId, `开始重置机场「${ap.name}」订阅 (${ap.panel_type}${ap.reset_mode === 'browser' ? ' · 浏览器模式' : ''})`);
 
-    const { subUrl, detected } = await resetAirportSubscription(ap);
+    const { subUrl, detected } = await resetAirportSubscription(ap, { log: (line) => appendLog(taskId, line) });
     if (detected) appendLog(taskId, `通用适配器识别面板类型：${detected}`);
     appendLog(taskId, `重置成功，新订阅链接：${subUrl}`);
 

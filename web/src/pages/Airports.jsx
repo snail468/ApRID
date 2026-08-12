@@ -198,6 +198,7 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
     remark: airport.remark || '', proxy: airport.proxy || '',
     user_agent: airport.user_agent || '', cookie: airport.cookie || '',
     auth_token: airport.auth_token || '',
+    reset_mode: airport.reset_mode || 'http', cdp_endpoint: airport.cdp_endpoint || '',
     request_headers: safeParse(airport.request_headers),
     node_filter: safeParse(airport.node_filter),
     expire_at: toDatetimeLocal(airport.expire_at),
@@ -277,6 +278,30 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
         <label>登录令牌 Authorization（可选，V2Board/Xboard 自动重置优先用它，跳过登录以绕过人机验证）</label>
         <input value={f.auth_token} onChange={(e) => set('auth_token', e.target.value)} placeholder="浏览器登录后从任意接口请求头复制 Authorization 值" />
       </div>
+
+      <div className="section-label">自动重置方式</div>
+      <div className="field-row">
+        <div className="field">
+          <label>重置方式</label>
+          <select value={f.reset_mode} onChange={(e) => set('reset_mode', e.target.value)}>
+            <option value="http">HTTP 轻量（默认，直接请求接口）</option>
+            <option value="browser">浏览器模式（CDP 侧车，绕过 CF/签名）</option>
+          </select>
+        </div>
+        {f.reset_mode === 'browser' && (
+          <div className="field">
+            <label>CDP 端点（留空=用默认 browserless 侧车）</label>
+            <input value={f.cdp_endpoint} onChange={(e) => set('cdp_endpoint', e.target.value)} placeholder="http://browserless:3000" />
+          </div>
+        )}
+      </div>
+      {f.reset_mode === 'browser' && (
+        <div className="muted small" style={{ marginTop: -6, marginBottom: 4 }}>
+          浏览器模式通过 docker-compose 中的 <code>browserless</code> 侧车打开机场页面，在真实浏览器上下文里完成登录并重置——
+          天然携带 cf_clearance、复用页面请求签名，可绕过大多数人机验证与接口加密。仍需填写账号密码或登录令牌；
+          Cookie 字段可粘贴 cf_clearance 以提高通过率。请先用「自动化」页的「测试」验证。
+        </div>
+      )}
 
       <div className="section-label">节点处理</div>
       <NodeProcessingEditor value={f.node_filter} onChange={(v) => set('node_filter', v)} />

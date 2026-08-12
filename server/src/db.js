@@ -138,7 +138,11 @@ function ensureColumns(table, columns) {
     if (!existing.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`);
   }
 }
-ensureColumns('airports', { user_agent: 'TEXT', cookie: 'TEXT', auth_token: 'TEXT' });
+ensureColumns('airports', {
+  user_agent: 'TEXT', cookie: 'TEXT', auth_token: 'TEXT',
+  // reset_mode: 'http' (default, lightweight fetch) | 'browser' (CDP side-car)
+  reset_mode: "TEXT DEFAULT 'http'", cdp_endpoint: 'TEXT',
+});
 ensureColumns('users', {
   traffic_base: 'INTEGER', traffic_used: 'INTEGER',
   traffic_limit: 'INTEGER', traffic_updated_at: 'INTEGER',
