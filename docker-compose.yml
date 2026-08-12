@@ -20,6 +20,8 @@ services:
       - BROWSER_CDP_ENDPOINT=ws://browserless:3000?token=aprid-browser-token
       # FlareSolverr（推荐用于 Cloudflare 机场）默认地址，指向下方 flaresolverr 侧车
       - FLARESOLVERR_URL=http://flaresolverr:8191
+      # 解挑战超时（毫秒）。魔戒等强挑战站点可调大，如 180000
+      - FLARESOLVERR_TIMEOUT=120000
     volumes:
       - ./data:/data
     # depends_on 不强制，browserless 仅在机场选择「浏览器模式」时才会被用到

@@ -25,6 +25,9 @@ export const config = {
   // FlareSolverr endpoint for the 'flaresolverr' reset mode (solves Cloudflare
   // and returns cf_clearance). Airports can override per-airport.
   flaresolverrUrl: process.env.FLARESOLVERR_URL || 'http://flaresolverr:8191',
+  // How long FlareSolverr may spend solving a challenge (ms). Hard CF challenges
+  // often need >60s; bump via env if needed.
+  flaresolverrTimeout: parseInt(process.env.FLARESOLVERR_TIMEOUT || '120000', 10),
   // Optional captcha-solver placeholder (not wired yet — reserved interface).
   captchaProvider: process.env.CAPTCHA_PROVIDER || '',   // e.g. 'capsolver' | 'yescaptcha'
   captchaApiKey: process.env.CAPTCHA_API_KEY || '',

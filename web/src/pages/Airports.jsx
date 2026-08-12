@@ -308,6 +308,8 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
           FlareSolverr 用真实浏览器解开 Cloudflare，取回 cf_clearance 与匹配 UA 写回本机场，再走 HTTP 完成登录+重置——
           面板与 FlareSolverr 同出口 IP，cf_clearance 有效，可稳定绕过 CF「Just a moment」。需在 docker-compose 里启用
           <code>flaresolverr</code> 服务。仍要填账号密码或登录令牌。请先用「自动化」页「测试」验证。
+          <br />强挑战站点（如魔戒）若报“解挑战超时”：① 调大 <code>FLARESOLVERR_TIMEOUT</code>（如 180000）；
+          ② 给上方「拉取代理」配一个干净/住宅代理——机房 IP 常被加强挑战，配代理后 FlareSolverr 与重置会走同一代理，成功率更高。
         </div>
       )}
       {f.reset_mode === 'browser' && (

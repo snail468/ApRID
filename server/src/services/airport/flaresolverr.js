@@ -35,28 +35,43 @@ export async function solveClearance(ap, log) {
   const fsUrl = (ap.flaresolverr_url || '').trim() || config.flaresolverrUrl;
   if (!fsUrl) throw new Error('未配置 FlareSolverr 地址（FLARESOLVERR_URL 或机场「FlareSolverr 地址」字段）');
   const target = origin(ap.url);
-  log?.(`FlareSolverr 解 Cloudflare：${fsUrl} → ${target}`);
+  const maxTimeout = Math.max(30000, Number(config.flaresolverrTimeout) || 120000);
+  const proxy = (ap.proxy || '').trim();
+  log?.(`FlareSolverr 解 Cloudflare：${fsUrl} → ${target}（超时 ${Math.round(maxTimeout / 1000)}s${proxy ? '，经代理' : ''}）`);
+
+  const payload = { cmd: 'request.get', url: target, maxTimeout };
+  // Route the solve through the airport's proxy so the challenge is faced from a
+  // cleaner IP (VPS/datacenter IPs get harder challenges) AND cf_clearance is
+  // bound to that IP — the HTTP reset then reuses the same proxy, so it matches.
+  if (proxy) payload.proxy = { url: proxy };
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 95000);
+  const timer = setTimeout(() => controller.abort(), maxTimeout + 30000);
   let j;
   try {
     const res = await fetch(fsUrl.replace(/\/$/, '') + '/v1', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ cmd: 'request.get', url: target, maxTimeout: 60000 }),
+      body: JSON.stringify(payload),
       signal: controller.signal,
     });
     j = await res.json().catch(() => null);
   } catch (e) {
-    if (e.name === 'AbortError') throw new Error('FlareSolverr 超时（>95s）：站点挑战过重或服务过载');
+    if (e.name === 'AbortError') throw new Error(`FlareSolverr 超时（>${Math.round((maxTimeout + 30000) / 1000)}s）：站点挑战过重或服务过载`);
     throw new Error(`无法连接 FlareSolverr（${fsUrl}）：${e.message}。请确认 flaresolverr 侧车已启动`);
   } finally {
     clearTimeout(timer);
   }
 
   if (!j) throw new Error('FlareSolverr 返回无法解析');
-  if (j.status !== 'ok') throw new Error(`FlareSolverr 未通过：${j.message || j.status}`);
+  if (j.status !== 'ok') {
+    const msg = j.message || j.status;
+    const isTimeout = /timeout|challenge/i.test(String(msg));
+    const hint = isTimeout
+      ? '。该机场的 Cloudflare 挑战较强：可① 提高超时（FLARESOLVERR_TIMEOUT，如 180000）；② 给机场配一个干净/住宅代理（机房 IP 常被加强挑战，配代理后 FlareSolverr 与重置都会走它）；③ 换更新的 FlareSolverr 镜像；④ 仍不行则该站可能用 Turnstile 交互验证，暂无法自动绕过，可退回手动更新订阅链接后仅「拉取」'
+      : '';
+    throw new Error(`FlareSolverr 未通过：${msg}${hint}`);
+  }
   const sol = j.solution || {};
   const cookieString = (sol.cookies || []).map((c) => `${c.name}=${c.value}`).join('; ');
   if (!/cf_clearance=/.test(cookieString)) {
