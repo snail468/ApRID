@@ -80,67 +80,137 @@ async function withBrowserPage(ap, log, fn) {
   }
 }
 
-// Runs login + reset entirely inside the page context. Returns { subUrl, via }.
-// `mode` selects which panel family's endpoints to try.
-function inPageResetScript() {
+// The login + (optional) reset flow, executed entirely inside the page context.
+// Returns a *structured* result — never throws inside the page — so the Node side
+// can log every step's real HTTP status/body and give an accurate error:
+//   { ok: true,  subUrl, via, changed, steps }
+//   { ok: false, error, steps }
+// `dryRun` = true skips the reset (used by the connection test).
+function panelScript() {
   // NOTE: this function is serialized and executed *inside the browser page*.
-  return async ({ mode, email, password, authToken }) => {
-    const jget = async (url, opts) => {
-      const r = await fetch(url, { credentials: 'include', ...opts });
-      const text = await r.text();
-      let json = null; try { json = JSON.parse(text); } catch { /* html */ }
-      return { status: r.status, text, json };
+  return async ({ mode, email, password, authToken, dryRun }) => {
+    const steps = [];
+    const clip = (s) => (s || '').replace(/\s+/g, ' ').slice(0, 140);
+    const jreq = async (url, opts) => {
+      let status = 0; let text = ''; let json = null;
+      try {
+        const r = await fetch(url, { credentials: 'include', ...opts });
+        status = r.status; text = await r.text();
+        try { json = JSON.parse(text); } catch { /* html/plain */ }
+      } catch (e) { text = 'fetch error: ' + e.message; }
+      return { status, text, json };
     };
+    // subscribe_url can live at data.subscribe_url, or data itself may be the url
+    const readSub = (j) => {
+      if (j && j.data && typeof j.data === 'object' && j.data.subscribe_url) return j.data.subscribe_url;
+      if (j && typeof j.data === 'string' && /^https?:/i.test(j.data)) return j.data;
+      return null;
+    };
+    const fail = (error) => ({ ok: false, error, steps });
 
     const v2board = async () => {
       let auth = (authToken || '').trim();
+      if (auth) steps.push('鉴权：使用登录令牌');
       if (!auth) {
-        const lr = await jget('/api/v1/passport/auth/login', {
+        const lr = await jreq('/api/v1/passport/auth/login', {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ email, password }),
         });
-        auth = lr.json?.data?.auth_data || lr.json?.data?.token || '';
-        if (!auth) throw new Error('登录失败：账号或密码错误（V2Board/Xboard）');
+        steps.push('登录 /passport/auth/login → HTTP ' + lr.status);
+        auth = (lr.json && lr.json.data && (lr.json.data.auth_data || lr.json.data.token)) || '';
+        if (!auth) return fail('登录失败：' + ((lr.json && lr.json.message) || ('HTTP ' + lr.status + ' ' + clip(lr.text))) + '（V2Board/Xboard）');
       }
-      // reset then confirm
-      let rr = await jget('/api/v1/user/resetSecurity', { headers: { authorization: auth } });
-      if (rr.status === 405) rr = await jget('/api/v1/user/resetSecurity', { method: 'POST', headers: { authorization: auth } });
-      let sub = typeof rr.json?.data === 'string' ? rr.json.data : null;
-      if (!sub) {
-        const info = await jget('/api/v1/user/getSubscribe', { headers: { authorization: auth } });
-        sub = info.json?.data?.subscribe_url || null;
+      const h = { authorization: auth };
+
+      const before = await jreq('/api/v1/user/getSubscribe', { headers: h });
+      const beforeUrl = readSub(before.json);
+      steps.push('读取订阅(重置前) /user/getSubscribe → HTTP ' + before.status + (beforeUrl ? '，已读到链接' : '，未读到 subscribe_url'));
+      if (before.status === 401 || before.status === 403) return fail('鉴权被拒 HTTP ' + before.status + '：登录令牌可能已失效');
+
+      if (dryRun) {
+        if (before.status >= 400) return fail('鉴权失败 HTTP ' + before.status);
+        return { ok: true, subUrl: beforeUrl, via: 'browser/v2board', steps };
       }
-      if (!sub) throw new Error('重置成功但未取得订阅链接（V2Board/Xboard）');
-      return { subUrl: sub, via: 'browser/v2board' };
+
+      let rr = await jreq('/api/v1/user/resetSecurity', { headers: h });
+      if (rr.status === 404 || rr.status === 405) rr = await jreq('/api/v1/user/resetSecurity', { method: 'POST', headers: h });
+      steps.push('重置 /user/resetSecurity → HTTP ' + rr.status + ' ' + clip(rr.text));
+      // business failure: JSON with a message/errors but no data
+      const bizFail = rr.json && rr.json.data === undefined && (rr.json.message || rr.json.errors);
+      if (rr.status < 200 || rr.status >= 300 || bizFail) {
+        return fail('重置接口失败 HTTP ' + rr.status + '：' + ((rr.json && rr.json.message) || clip(rr.text) || '无响应体'));
+      }
+      // some builds return the url directly, most just return data:true
+      let sub = (rr.json && typeof rr.json.data === 'string' && /^https?:/i.test(rr.json.data)) ? rr.json.data : null;
+
+      const after = await jreq('/api/v1/user/getSubscribe', { headers: h });
+      const afterUrl = sub || readSub(after.json);
+      steps.push('读取订阅(重置后) /user/getSubscribe → HTTP ' + after.status + (afterUrl ? '，已读到链接' : '，未读到 subscribe_url'));
+      if (!afterUrl) {
+        return fail('重置请求已发出（HTTP ' + rr.status + '），但未能取得新订阅链接。getSubscribe.data=' +
+          clip(JSON.stringify(after.json && after.json.data)) + '。可能该面板订阅端点/字段不同，请把本日志反馈以便适配');
+      }
+      const changed = beforeUrl != null ? (afterUrl !== beforeUrl) : null;
+      return { ok: true, subUrl: afterUrl, via: 'browser/v2board', changed, steps };
     };
 
     const sspanel = async () => {
       const form = new URLSearchParams({ email, passwd: password, remember_me: 'on' });
-      const lr = await jget('/auth/login', {
+      const lr = await jreq('/auth/login', {
         method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
       });
+      steps.push('登录 /auth/login → HTTP ' + lr.status);
       if (lr.json && lr.json.ret !== undefined && lr.json.ret !== 1) {
-        throw new Error('登录失败：' + (lr.json.msg || '账号或密码错误') + '（SSPanel）');
+        return fail('登录失败：' + ((lr.json && lr.json.msg) || '账号或密码错误') + '（SSPanel）');
       }
-      await jget('/user/reset_URL').catch(() => {});
-      await jget('/user/subscribe/reset', { method: 'POST' }).catch(() => {});
-      const prof = await jget('/user');
-      const m = prof.text.match(/https?:\/\/[^\s"'<>]+\/(?:link|sub|s)\/[A-Za-z0-9]+/) ||
-        prof.text.match(/(https?:\/\/[^\s"'<>]+subscribe[^\s"'<>]*)/i);
-      const sub = m ? m[0].replace(/&amp;/g, '&') : null;
-      if (!sub) throw new Error('重置成功但未能解析订阅链接（SSPanel）');
-      return { subUrl: sub, via: 'browser/sspanel' };
+      const findSub = (t) => {
+        const m = t.match(/https?:\/\/[^\s"'<>]+\/(?:link|sub|s)\/[A-Za-z0-9]+/) ||
+          t.match(/(https?:\/\/[^\s"'<>]+subscribe[^\s"'<>]*)/i);
+        return m ? m[0].replace(/&amp;/g, '&') : null;
+      };
+      if (dryRun) return { ok: true, subUrl: null, via: 'browser/sspanel', steps };
+
+      const beforeProf = await jreq('/user');
+      const beforeUrl = findSub(beforeProf.text);
+      let rr = await jreq('/user/reset_URL');
+      if (rr.status >= 400) rr = await jreq('/user/subscribe/reset', { method: 'POST' });
+      steps.push('重置 /user/reset_URL → HTTP ' + rr.status);
+      const afterProf = await jreq('/user');
+      const afterUrl = findSub(afterProf.text);
+      if (!afterUrl) return fail('重置请求已发出，但未能从用户中心解析到订阅链接（SSPanel）');
+      const changed = beforeUrl != null ? (afterUrl !== beforeUrl) : null;
+      return { ok: true, subUrl: afterUrl, via: 'browser/sspanel', changed, steps };
     };
 
     if (mode === 'sspanel') return sspanel();
     if (mode === 'v2board' || mode === 'xboard') return v2board();
-    // generic: try both
-    const errs = [];
-    for (const fn of [v2board, sspanel]) {
-      try { return await fn(); } catch (e) { errs.push(e.message); }
-    }
-    throw new Error('通用浏览器重置失败：' + errs.join(' | '));
+    // generic: try v2board then sspanel
+    const r1 = await v2board();
+    if (r1.ok) return r1;
+    steps.push('— V2Board 尝试失败，改试 SSPanel —');
+    const r2 = await sspanel();
+    if (r2.ok) return r2;
+    return fail('通用浏览器重置失败：' + r1.error + ' ｜ ' + r2.error);
   };
+}
+
+async function runPanelScript(ap, log, dryRun) {
+  return withBrowserPage(ap, log, async (page) => {
+    const r = await page.evaluate(panelScript(), {
+      mode: ap.panel_type,
+      email: ap.account || '',
+      password: ap.password || '',
+      authToken: (ap.auth_token || '').trim(),
+      dryRun,
+    });
+    for (const s of r.steps || []) log?.('· ' + s);
+    if (!r.ok) throw new Error(r.error || '浏览器操作失败');
+    if (!dryRun) {
+      if (r.changed === false) log?.('⚠ 订阅链接与重置前一致——该面板可能重置后 URL 不变，或本次未真正生效，请留意');
+      else if (r.changed === true) log?.('✓ 订阅链接已变化，重置生效');
+    }
+    return r;
+  });
 }
 
 export async function browserReset(ap, log) {
@@ -148,54 +218,17 @@ export async function browserReset(ap, log) {
   if (!ap.auth_token && (!ap.account || !ap.password)) {
     throw new Error('机场未配置登录账号或密码（或改用「登录令牌」直连）');
   }
-  return withBrowserPage(ap, log, async (page) => {
-    const r = await page.evaluate(inPageResetScript(), {
-      mode: ap.panel_type,
-      email: ap.account || '',
-      password: ap.password || '',
-      authToken: (ap.auth_token || '').trim(),
-    });
-    log?.(`浏览器上下文重置完成（${r.via}）`);
-    return { subUrl: r.subUrl, via: r.via };
-  });
+  const r = await runPanelScript(ap, log, false);
+  return { subUrl: r.subUrl, via: r.via };
 }
 
-// Dry-run test for browser mode: log in + read the current subscribe_url without
-// resetting.
+// Dry-run test for browser mode: authenticate + read current subscribe_url without
+// resetting. Surfaces whether the panel actually returns a subscription link.
 export async function browserTest(ap) {
   if (!ap.url) throw new Error('机场未配置网址');
-  return withBrowserPage(ap, null, async (page) => {
-    const r = await page.evaluate(async ({ mode, email, password, authToken }) => {
-      const jget = async (url, opts) => {
-        const res = await fetch(url, { credentials: 'include', ...opts });
-        const text = await res.text();
-        let json = null; try { json = JSON.parse(text); } catch { /* html */ }
-        return { status: res.status, text, json };
-      };
-      const v2 = async () => {
-        let auth = (authToken || '').trim();
-        if (!auth) {
-          const lr = await jget('/api/v1/passport/auth/login', {
-            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password }),
-          });
-          auth = lr.json?.data?.auth_data || lr.json?.data?.token || '';
-          if (!auth) throw new Error('登录失败（V2Board/Xboard）');
-        }
-        const info = await jget('/api/v1/user/getSubscribe', { headers: { authorization: auth } });
-        return { subUrl: info.json?.data?.subscribe_url || null, via: 'browser/v2board' };
-      };
-      const ss = async () => {
-        const form = new URLSearchParams({ email, passwd: password, remember_me: 'on' });
-        const lr = await jget('/auth/login', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString() });
-        if (lr.json && lr.json.ret !== undefined && lr.json.ret !== 1) throw new Error('登录失败（SSPanel）');
-        return { subUrl: null, via: 'browser/sspanel' };
-      };
-      if (mode === 'sspanel') return ss();
-      if (mode === 'v2board' || mode === 'xboard') return v2();
-      const errs = [];
-      for (const fn of [v2, ss]) { try { return await fn(); } catch (e) { errs.push(e.message); } }
-      throw new Error('通用浏览器测试失败：' + errs.join(' | '));
-    }, { mode: ap.panel_type, email: ap.account || '', password: ap.password || '', authToken: (ap.auth_token || '').trim() });
-    return { ok: true, via: r.via, subUrl: r.subUrl, note: r.subUrl ? '浏览器鉴权成功，可读取订阅链接' : '浏览器鉴权成功' };
-  });
+  const r = await runPanelScript(ap, null, true);
+  return {
+    ok: true, via: r.via, subUrl: r.subUrl,
+    note: r.subUrl ? '浏览器鉴权成功，可读取订阅链接' : '浏览器鉴权成功，但未读到订阅链接（重置时可能无法自动回填，请留意）',
+  };
 }
