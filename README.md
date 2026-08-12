@@ -34,9 +34,13 @@
 对付得最凶的机场（Cloudflare 5 秒盾、Turnstile、接口带 `X-Signature`/RSA 加密），面板支持**浏览器模式**：不再自己拼 HTTP 请求，而是通过 CDP 接管一个真实 Chromium，在**机场页面自己的 JS 上下文里**完成登录与重置——请求由真实浏览器在机场域名下发出，天然携带 `cf_clearance`、复用页面的请求签名，绕过绝大多数防护。
 
 - 主镜像只含 `playwright-core`（几 MB，不含浏览器）；浏览器由 `docker-compose.yml` 里的可选 **`browserless`** 侧车提供，用不到可整段删除。
-- 用法：机场编辑页「自动重置方式」选 **浏览器模式**，仍填账号密码或登录令牌；`Cookie` 字段可粘贴 `cf_clearance` 提高通过率；CDP 端点留空即用侧车默认 `http://browserless:3000`（也可指向你自建/远程的浏览器）。
+- **必须用带 browserless 的 `docker-compose.yml` 一起启动**（`docker compose up -d`）——单独 `docker run` 或旧版 compose 里没有 browserless，会报 `ENOTFOUND browserless`。
+- browserless v2 需要 token：compose 里 browserless 的 `TOKEN` 与 aprid 的 `BROWSER_CDP_ENDPOINT=ws://browserless:3000?token=...` 必须一致（把示例里的 `aprid-browser-token` 改成你自己的随机串）。
+- 用法：机场编辑页「自动重置方式」选 **浏览器模式**，仍填账号密码或登录令牌；`Cookie` 字段可粘贴 `cf_clearance` 提高通过率；CDP 端点留空即用默认侧车（也可指向你自建/远程的浏览器）。
 - 硬性点击验证码（极验滑块等）已预留打码接口（`CAPTCHA_PROVIDER`/`CAPTCHA_API_KEY`），默认不启用。
-- 启用前请务必先用「测试」按钮验证侧车连通与登录可用。
+- 启用前请务必先用「自动化」页的 **测试** 按钮验证侧车连通与登录可用。
+
+**从零开始三步**：① 用最新 `docker-compose.yml`（含 browserless）执行 `docker compose pull && docker compose up -d`；② `docker compose ps` 确认 `aprid` 与 `browserless` 都是 Up；③ 机场编辑页把「自动重置方式」改成浏览器模式并保存，去「自动化」页点该机场「测试」，显示绿色 ✓ 即成功。
 
 ## 部署
 

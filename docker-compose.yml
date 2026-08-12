@@ -14,8 +14,10 @@ services:
       - PORT=6601
       - DB_PATH=/data/aprid.db
       # 浏览器模式（机场自动重置绕过 CF/签名）默认连接下方 browserless 侧车。
-      # 不需要浏览器模式时，可删掉 browserless 服务，此项留着也无害。
-      - BROWSER_CDP_ENDPOINT=http://browserless:3000
+      # browserless v2 需要 token，端点用 ws + ?token=，token 与下方 browserless 的
+      # TOKEN 必须一致（自行改成你自己的随机串）。不需要浏览器模式时可删掉 browserless
+      # 服务，此项留着也无害。
+      - BROWSER_CDP_ENDPOINT=ws://browserless:3000?token=aprid-browser-token
     volumes:
       - ./data:/data
     # depends_on 不强制，browserless 仅在机场选择「浏览器模式」时才会被用到
@@ -36,6 +38,7 @@ services:
     environment:
       - CONCURRENT=2
       - TIMEOUT=60000
-      # 如需外部访问可设置 TOKEN，并在机场「CDP 端点」里带上 ?token=...
+      # token 必须与上方 aprid 的 BROWSER_CDP_ENDPOINT 里的 ?token= 一致
+      - TOKEN=aprid-browser-token
     # ports:
     #   - "3000:3000"   # 默认不暴露；仅当你要从外部连它时再打开

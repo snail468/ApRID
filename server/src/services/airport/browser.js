@@ -54,7 +54,10 @@ async function withBrowserPage(ap, log, fn) {
   try {
     browser = await chromium.connectOverCDP(endpoint, { timeout: 30000 });
   } catch (err) {
-    throw new Error(`无法连接浏览器服务（${endpoint}）：${err.message}。请确认 browserless 侧车已启动`);
+    const hint = /ENOTFOUND|ECONNREFUSED/.test(err.message)
+      ? '请用含 browserless 服务的 docker-compose.yml 一起启动（docker compose up -d），确认 `docker compose ps` 里 browserless 在运行，且 token 与端点里的 ?token= 一致'
+      : '请检查 CDP 端点是否正确、browserless token 是否匹配';
+    throw new Error(`无法连接浏览器服务（${endpoint}）：${err.message}。${hint}`);
   }
 
   const base = origin(ap.url);
