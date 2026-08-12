@@ -29,7 +29,16 @@
 5. 「自动化」页每个机场有 **测试** 按钮，仅验证账号/令牌/Cookie 是否可用（不重置），运行前先自测；
 6. 实在无法自动化的机场，可只手动更新订阅链接后执行「拉取」。
 
-#### 浏览器模式（绕过 CF / 接口签名的终极方案，可选）
+#### FlareSolverr 模式（对付 Cloudflare 机场的首选，可选）
+
+魔戒等启用 Cloudflare **托管挑战** 的机场，无头浏览器也常过不去。**FlareSolverr** 专门解这个：它用反检测浏览器解开 CF，返回 `cf_clearance` 和匹配的 UA，面板拿到后**写回本机场**，再走普通 HTTP 完成登录+重置。由于面板与 FlareSolverr 在同一 compose 网络、**同一出口 IP**，`cf_clearance` 有效，登录接口不再 403。重置后的订阅拉取也复用该 cookie/UA，一并过 CF。
+
+- compose 里已内置可选 `flaresolverr` 服务；`docker compose up -d` 即随之启动。
+- 机场编辑页「自动重置方式」选 **FlareSolverr（推荐）**，仍填账号密码或登录令牌，FlareSolverr 地址留空即用默认侧车 `http://flaresolverr:8191`。
+- 先用「自动化」页 **测试** 验证：能读到订阅链接即通。
+- 说明：`cf_clearance` 有时效（约几十分钟~数小时），过期后下次运行会自动重新解一次，无需手动维护。
+
+#### 浏览器模式（绕过 CF / 接口签名的另一方案，可选）
 
 对付得最凶的机场（Cloudflare 5 秒盾、Turnstile、接口带 `X-Signature`/RSA 加密），面板支持**浏览器模式**：不再自己拼 HTTP 请求，而是通过 CDP 接管一个真实 Chromium，在**机场页面自己的 JS 上下文里**完成登录与重置——请求由真实浏览器在机场域名下发出，天然携带 `cf_clearance`、复用页面的请求签名，绕过绝大多数防护。
 

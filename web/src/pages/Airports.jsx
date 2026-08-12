@@ -199,6 +199,7 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
     user_agent: airport.user_agent || '', cookie: airport.cookie || '',
     auth_token: airport.auth_token || '',
     reset_mode: airport.reset_mode || 'http', cdp_endpoint: airport.cdp_endpoint || '',
+    flaresolverr_url: airport.flaresolverr_url || '',
     request_headers: safeParse(airport.request_headers),
     node_filter: safeParse(airport.node_filter),
     expire_at: toDatetimeLocal(airport.expire_at),
@@ -285,6 +286,7 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
           <label>重置方式</label>
           <select value={f.reset_mode} onChange={(e) => set('reset_mode', e.target.value)}>
             <option value="http">HTTP 轻量（默认，直接请求接口）</option>
+            <option value="flaresolverr">FlareSolverr（推荐，专治 Cloudflare）</option>
             <option value="browser">浏览器模式（CDP 侧车，绕过 CF/签名）</option>
           </select>
         </div>
@@ -294,12 +296,25 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
             <input value={f.cdp_endpoint} onChange={(e) => set('cdp_endpoint', e.target.value)} placeholder="http://browserless:3000" />
           </div>
         )}
+        {f.reset_mode === 'flaresolverr' && (
+          <div className="field">
+            <label>FlareSolverr 地址（留空=用默认侧车）</label>
+            <input value={f.flaresolverr_url} onChange={(e) => set('flaresolverr_url', e.target.value)} placeholder="http://flaresolverr:8191" />
+          </div>
+        )}
       </div>
+      {f.reset_mode === 'flaresolverr' && (
+        <div className="muted small" style={{ marginTop: -6, marginBottom: 4 }}>
+          FlareSolverr 用真实浏览器解开 Cloudflare，取回 cf_clearance 与匹配 UA 写回本机场，再走 HTTP 完成登录+重置——
+          面板与 FlareSolverr 同出口 IP，cf_clearance 有效，可稳定绕过 CF「Just a moment」。需在 docker-compose 里启用
+          <code>flaresolverr</code> 服务。仍要填账号密码或登录令牌。请先用「自动化」页「测试」验证。
+        </div>
+      )}
       {f.reset_mode === 'browser' && (
         <div className="muted small" style={{ marginTop: -6, marginBottom: 4 }}>
           浏览器模式通过 docker-compose 中的 <code>browserless</code> 侧车打开机场页面，在真实浏览器上下文里完成登录并重置——
-          天然携带 cf_clearance、复用页面请求签名，可绕过大多数人机验证与接口加密。仍需填写账号密码或登录令牌；
-          Cookie 字段可粘贴 cf_clearance 以提高通过率。请先用「自动化」页的「测试」验证。
+          天然携带 cf_clearance、复用页面请求签名。但无头浏览器可能被 Cloudflare 托管挑战识别；这类站点更推荐上面的 FlareSolverr。
+          仍需填账号密码或登录令牌。请先用「自动化」页的「测试」验证。
         </div>
       )}
 

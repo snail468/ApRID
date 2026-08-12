@@ -1,6 +1,7 @@
 import { ProxyAgent } from 'undici';
 import { detectChallenge, ANTIBOT_HINT } from './antibot.js';
 import { browserReset, browserTest } from './browser.js';
+import { applyClearance } from './flaresolverr.js';
 
 const UA = (ap) => ap.user_agent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
@@ -293,12 +294,23 @@ async function sspanelTest(ap) {
   return { ok: true, via: '账号密码登录', subUrl: null, note: '登录成功（SSPanel）；重置链接需实际运行才能确认' };
 }
 
-export async function testAirportConnection(ap) {
-  if (!ap.url) throw new Error('机场未配置网址');
-  if (ap.reset_mode === 'browser') return browserTest(ap);
-  if (!ap.auth_token && (!ap.account || !ap.password)) {
-    throw new Error('机场未配置登录账号或密码（或改用「登录令牌」直连）');
+// HTTP-adapter dispatch by panel type — shared by plain HTTP mode and the
+// FlareSolverr mode (which first injects cf_clearance, then reuses these).
+function httpResetByType(ap) {
+  switch (ap.panel_type) {
+    case 'v2board':
+    case 'xboard':
+      return v2boardReset(ap);
+    case 'sspanel':
+      return sspanelReset(ap);
+    case 'generic':
+      return genericReset(ap);
+    default:
+      throw new Error(`不支持的面板类型：${ap.panel_type}（可选 generic / v2board / xboard / sspanel）`);
   }
+}
+
+async function httpTestByType(ap) {
   switch (ap.panel_type) {
     case 'v2board':
     case 'xboard':
@@ -318,6 +330,17 @@ export async function testAirportConnection(ap) {
   }
 }
 
+export async function testAirportConnection(ap) {
+  if (!ap.url) throw new Error('机场未配置网址');
+  if (ap.reset_mode === 'browser') return browserTest(ap);
+  if (!ap.auth_token && (!ap.account || !ap.password)) {
+    throw new Error('机场未配置登录账号或密码（或改用「登录令牌」直连）');
+  }
+  let target = ap;
+  if (ap.reset_mode === 'flaresolverr') target = await applyClearance(ap);
+  return httpTestByType(target);
+}
+
 export async function resetAirportSubscription(ap, { log } = {}) {
   if (!ap.url) throw new Error('机场未配置网址');
   // Browser mode: drive the side-car Chromium (bypasses CF / request signing).
@@ -328,15 +351,12 @@ export async function resetAirportSubscription(ap, { log } = {}) {
   if (!ap.auth_token && (!ap.account || !ap.password)) {
     throw new Error('机场未配置登录账号或密码（或改用「登录令牌」直连）');
   }
-  switch (ap.panel_type) {
-    case 'v2board':
-    case 'xboard':
-      return v2boardReset(ap);
-    case 'sspanel':
-      return sspanelReset(ap);
-    case 'generic':
-      return genericReset(ap);
-    default:
-      throw new Error(`不支持的面板类型：${ap.panel_type}（可选 generic / v2board / xboard / sspanel）`);
+  // FlareSolverr mode: solve Cloudflare first, inject cf_clearance + UA, then run
+  // the normal HTTP adapter (login + reset) through the cleared session.
+  let target = ap;
+  if (ap.reset_mode === 'flaresolverr') {
+    target = await applyClearance(ap, log);
+    log?.('FlareSolverr 就绪，改用 HTTP 适配器完成登录并重置');
   }
+  return httpResetByType(target);
 }

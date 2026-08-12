@@ -18,6 +18,8 @@ services:
       # TOKEN 必须一致（自行改成你自己的随机串）。不需要浏览器模式时可删掉 browserless
       # 服务，此项留着也无害。
       - BROWSER_CDP_ENDPOINT=ws://browserless:3000?token=aprid-browser-token
+      # FlareSolverr（推荐用于 Cloudflare 机场）默认地址，指向下方 flaresolverr 侧车
+      - FLARESOLVERR_URL=http://flaresolverr:8191
     volumes:
       - ./data:/data
     # depends_on 不强制，browserless 仅在机场选择「浏览器模式」时才会被用到
@@ -42,3 +44,15 @@ services:
       - TOKEN=aprid-browser-token
     # ports:
     #   - "3000:3000"   # 默认不暴露；仅当你要从外部连它时再打开
+
+  # 可选：FlareSolverr —— 专治 Cloudflare 的机场自动重置「FlareSolverr 模式」用它
+  # 解开 CF 拿 cf_clearance。用不到可整段删除。不对公网暴露端口，仅 aprid 内网访问。
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: aprid-flaresolverr
+    restart: unless-stopped
+    environment:
+      - LOG_LEVEL=info
+      - TZ=Asia/Shanghai
+    # ports:
+    #   - "8191:8191"   # 默认不暴露；仅当你要从外部连它时再打开
