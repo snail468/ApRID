@@ -42,6 +42,12 @@
 
 **从零开始三步**：① 用最新 `docker-compose.yml`（含 browserless）执行 `docker compose pull && docker compose up -d`；② `docker compose ps` 确认 `aprid` 与 `browserless` 都是 Up；③ 机场编辑页把「自动重置方式」改成浏览器模式并保存，去「自动化」页点该机场「测试」，显示绿色 ✓ 即成功。
 
+**遇到 Cloudflare「Just a moment…」怎么办**：面板已会在打开页面后**自动等待 CF 挑战通过**再发接口请求，并伪装成正常桌面 Chrome。但默认的 **browserless 无头 Chromium 仍可能被“托管挑战（Managed Challenge）”识别**（如魔戒等）。此时按顺序尝试：
+
+1. **贴 cf_clearance**：在你自己浏览器过验证后，从开发者工具复制 `cf_clearance` 到机场 **Cookie** 字段——注意它与 **出口 IP + UA** 绑定，需与侧车一致才有效（同机部署时可行）；
+2. **换有头/反检测浏览器**做 CDP 侧车：把 `cdp_endpoint` 指向一个 headful 或反检测（stealth / camoufox）的浏览器；
+3. **上 FlareSolverr**（专治 CF）：单独跑 `ghcr.io/flaresolverr/flaresolverr`，用它拿到 cf_clearance 后回填 Cookie，再用普通 HTTP 模式重置——如需面板内置对接 FlareSolverr，提 issue 即可加。
+
 ## 部署
 
 **前置**：一台 Linux 服务器，已装 Docker（`curl -fsSL https://get.docker.com | sh`），并在**云厂商安全组 / 防火墙放行 TCP 6601** 入站（最容易漏的一步）。系统若启用了 ufw/firewalld 也要放行：

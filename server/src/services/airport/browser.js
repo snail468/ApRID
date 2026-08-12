@@ -64,20 +64,60 @@ async function withBrowserPage(ap, log, fn) {
   let context;
   let ownContext = false;
   try {
-    context = await browser.newContext({ userAgent: ap.user_agent || undefined, ignoreHTTPSErrors: true });
+    // Look like a normal desktop Chrome, not headless — the default browserless
+    // UA contains "HeadlessChrome", an instant Cloudflare tell.
+    const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+    context = await browser.newContext({
+      userAgent: ap.user_agent || DESKTOP_UA,
+      viewport: { width: 1280, height: 800 },
+      locale: 'zh-CN',
+      ignoreHTTPSErrors: true,
+    });
     ownContext = true;
     const cookies = cookiesFor(ap.cookie, base);
     if (cookies.length) await context.addCookies(cookies);
 
     const page = await context.newPage();
     log?.(`打开机场首页：${base}`);
-    await page.goto(base + '/', { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
+    await page.goto(base + '/', { waitUntil: 'load', timeout: 60000 }).catch(() => {});
+    await waitForCloudflare(page, log);
     await maybeSolveCaptcha(page, ap, log);
     return await fn(page, base);
   } finally {
     if (ownContext && context) await context.close().catch(() => {});
     await browser.close().catch(() => {});
   }
+}
+
+// After navigation, wait for Cloudflare's non-interactive challenge (「Just a
+// moment…」) to auto-solve so the page picks up the cf_clearance cookie before we
+// issue any API request. Reloads once mid-way in case the challenge stalls.
+async function waitForCloudflare(page, log) {
+  const onChallenge = async () => {
+    try {
+      return await page.evaluate(() => {
+        const t = (document.title || '').toLowerCase();
+        const b = (document.body ? document.body.innerText : '').toLowerCase().slice(0, 600);
+        return t.includes('just a moment') || t.includes('attention required') ||
+          b.includes('checking your browser') || b.includes('verify you are human') ||
+          !!document.querySelector('#challenge-form, #cf-challenge-running, .cf-browser-verification, #turnstile-wrapper');
+      });
+    } catch { return false; }
+  };
+  if (!(await onChallenge())) return true;
+  log?.('检测到 Cloudflare 挑战，等待自动通过…');
+  const deadline = Date.now() + 30000;
+  let reloaded = false;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(3000);
+    if (!(await onChallenge())) { log?.('✓ Cloudflare 挑战已通过'); return true; }
+    if (!reloaded && Date.now() > deadline - 18000) {
+      reloaded = true;
+      await page.reload({ waitUntil: 'load', timeout: 45000 }).catch(() => {});
+    }
+  }
+  log?.('⚠ Cloudflare 挑战在超时内未通过（无头浏览器可能被识别）');
+  return false;
 }
 
 // The login + (optional) reset flow, executed entirely inside the page context.
@@ -107,6 +147,8 @@ function panelScript() {
       return null;
     };
     const fail = (error) => ({ ok: false, error, steps });
+    const isChal = (t) => /just a moment|cf-chl|challenge-platform|attention required|checking your browser|verify you are human|enable javascript and cookies/i.test(t || '');
+    const CF_HINT = '被 Cloudflare 人机验证拦截（无头浏览器未通过）。可尝试：① 换用支持反检测/有头的浏览器镜像作为 CDP 侧车；② 用与侧车「同出口IP + 同UA」抓取的 cf_clearance 填到机场 Cookie 字段；③ 为该机场配 FlareSolverr/打码服务。详见 README「浏览器模式」。';
 
     const v2board = async () => {
       let auth = (authToken || '').trim();
@@ -117,6 +159,7 @@ function panelScript() {
           body: JSON.stringify({ email, password }),
         });
         steps.push('登录 /passport/auth/login → HTTP ' + lr.status);
+        if (isChal(lr.text)) return fail(CF_HINT);
         auth = (lr.json && lr.json.data && (lr.json.data.auth_data || lr.json.data.token)) || '';
         if (!auth) return fail('登录失败：' + ((lr.json && lr.json.message) || ('HTTP ' + lr.status + ' ' + clip(lr.text))) + '（V2Board/Xboard）');
       }
@@ -160,6 +203,7 @@ function panelScript() {
         method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
       });
       steps.push('登录 /auth/login → HTTP ' + lr.status);
+      if (isChal(lr.text)) return fail(CF_HINT);
       if (lr.json && lr.json.ret !== undefined && lr.json.ret !== 1) {
         return fail('登录失败：' + ((lr.json && lr.json.msg) || '账号或密码错误') + '（SSPanel）');
       }
