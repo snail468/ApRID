@@ -5,6 +5,7 @@ import path from 'node:path';
 import { config } from './config.js';
 import { seedAdmin } from './db.js';
 import { seedTemplates } from './seed.js';
+import { startScheduler } from './services/scheduler.js';
 
 import authRoutes from './routes/auth.js';
 import settingsRoutes from './routes/settings.js';
@@ -20,6 +21,7 @@ import automationRoutes from './routes/automation.js';
 
 seedAdmin();
 seedTemplates();
+startScheduler();
 
 const app = express();
 app.disable('x-powered-by');

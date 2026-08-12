@@ -5,7 +5,8 @@ import { DEFAULT_TEMPLATES } from './services/subscription/defaultTemplates.js';
 // installs re-sync their is_default templates to the new version.
 //   v1 → initial 5-client defaults
 //   v2 → round-3 rewrite: preserve standard ACL4SSR split routing per client
-const DEFAULT_TEMPLATES_VERSION = 2;
+//   v3 → fix ProxyGroup loop: 节点选择 no longer references 全球直连 (use DIRECT)
+const DEFAULT_TEMPLATES_VERSION = 3;
 
 // Seed / refresh the built-in default subscription templates.
 // - Inserts a default for any client family that has none yet (idempotent).

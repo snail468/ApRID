@@ -205,6 +205,16 @@ tr.row-active   { box-shadow: inset 3px 0 0 transparent; }
   border-radius: 8px; background: var(--bg);
 }
 .trigger-list { margin: 4px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
+.schedule-editor {
+  margin: 0 0 12px; padding: 8px 10px; border: 1px solid var(--border);
+  border-radius: 8px; display: flex; flex-direction: column; gap: 8px;
+}
+.schedule-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.schedule-row select { width: auto; }
+.schedule-inline { display: inline-flex; align-items: center; gap: 4px; }
+.schedule-inline input { width: 56px; }
+.ok-text { color: var(--green); }
+.err-text { color: var(--red); }
 
 @media (max-width: 860px) { .auto-grid { grid-template-columns: 1fr; } }
 @media (max-width: 640px) { .sub-modal-grid { grid-template-columns: 1fr; } }

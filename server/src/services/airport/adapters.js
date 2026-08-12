@@ -28,56 +28,85 @@ function origin(url) {
 const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
 // ---------------- V2Board / Xboard ----------------
+// Log in via the JSON API (usually captcha-free even when the web SPA is not)
+// and return the Authorization token.
+async function v2boardLogin(ap, base, dispatcher, common) {
+  if (!ap.account || !ap.password) throw new Error('未配置登录账号或密码（V2Board/Xboard）');
+  const loginRes = await fetch(`${base}/api/v1/passport/auth/login`, {
+    method: 'POST',
+    headers: common,
+    dispatcher,
+    body: JSON.stringify({ email: ap.account, password: ap.password }),
+  });
+  const loginText = await loginRes.text();
+  const challenge = detectChallenge(loginRes.status, loginText, loginRes.headers);
+  if (challenge) throw new Error(`${challenge}。${ANTIBOT_HINT}`);
+  let login = {};
+  try { login = JSON.parse(loginText); } catch { /* noop */ }
+  const authData = login?.data?.auth_data || login?.data?.token;
+  if (!authData) throw new Error(`登录失败：账号或密码错误（V2Board/Xboard）${login?.message ? '：' + login.message : ''}`);
+  return authData;
+}
+
+// Read the current subscribe_url for an authenticated session.
+async function v2boardGetSubscribe(base, authHeaders, dispatcher) {
+  const infoRes = await fetch(`${base}/api/v1/user/getSubscribe`, { method: 'GET', headers: authHeaders, dispatcher });
+  if (infoRes.status === 401 || infoRes.status === 403) return { unauthorized: true };
+  const info = await infoRes.json().catch(() => ({}));
+  return { subUrl: info?.data?.subscribe_url || null };
+}
+
+// Trigger the reset action, then confirm the new subscribe_url. Returns
+// { unauthorized } when the token/session was rejected so the caller can re-login.
+async function v2boardDoReset(base, auth, common, dispatcher) {
+  const authHeaders = { ...common, Authorization: auth };
+  delete authHeaders['Content-Type'];
+
+  // resetSecurity is GET on stock V2Board; some forks expose it as POST.
+  let res = await fetch(`${base}/api/v1/user/resetSecurity`, { method: 'GET', headers: authHeaders, dispatcher });
+  if (res.status === 405) {
+    res = await fetch(`${base}/api/v1/user/resetSecurity`, { method: 'POST', headers: authHeaders, dispatcher });
+  }
+  if (res.status === 401 || res.status === 403) return { unauthorized: true };
+  const reset = await res.json().catch(() => ({}));
+  let subUrl = typeof reset?.data === 'string' ? reset.data : null;
+
+  if (!subUrl) {
+    const info = await v2boardGetSubscribe(base, authHeaders, dispatcher);
+    if (info.unauthorized) return { unauthorized: true };
+    subUrl = info.subUrl;
+  }
+  return { subUrl };
+}
+
 async function v2boardReset(ap) {
   const base = origin(ap.url);
   const dispatcher = agent(ap.proxy);
   const common = { 'Content-Type': 'application/json', 'User-Agent': UA(ap) };
   if (ap.cookie) common.Cookie = ap.cookie;
 
-  // If a captured Authorization token is provided, skip the login step entirely.
-  // Login is where anti-bot/captcha usually blocks; a browser-captured token
-  // lets us go straight to the reset call.
+  // Token-first: a browser-captured Authorization skips the login step, which is
+  // where anti-bot/captcha usually blocks.
+  const haveCreds = !!(ap.account && ap.password);
   let authData = (ap.auth_token || '').trim() || null;
-  if (!authData) {
-    // 1. login -> auth_data token
-    const loginRes = await fetch(`${base}/api/v1/passport/auth/login`, {
-      method: 'POST',
-      headers: common,
-      dispatcher,
-      body: JSON.stringify({ email: ap.account, password: ap.password }),
-    });
-    const loginText = await loginRes.text();
-    const challenge = detectChallenge(loginRes.status, loginText, loginRes.headers);
-    if (challenge) throw new Error(`${challenge}。${ANTIBOT_HINT}`);
-    let login = {};
-    try { login = JSON.parse(loginText); } catch { /* noop */ }
-    authData = login?.data?.auth_data || login?.data?.token;
-    if (!authData) throw new Error('登录失败：账号或密码错误（V2Board）');
-  }
-  const authHeaders = { ...common, Authorization: authData };
-  delete authHeaders['Content-Type'];
+  let usedToken = !!authData;
+  if (!authData) authData = await v2boardLogin(ap, base, dispatcher, common);
 
-  // 2. reset subscribe url
-  const resetRes = await fetch(`${base}/api/v1/user/resetSecurity`, {
-    method: 'GET',
-    headers: authHeaders,
-    dispatcher,
-  });
-  const reset = await resetRes.json().catch(() => ({}));
-  let subUrl = typeof reset?.data === 'string' ? reset.data : null;
+  let r = await v2boardDoReset(base, authData, common, dispatcher);
 
-  // 3. fetch subscribe info to confirm the new url if reset didn't return one
-  if (!subUrl) {
-    const infoRes = await fetch(`${base}/api/v1/user/getSubscribe`, {
-      method: 'GET',
-      headers: authHeaders,
-      dispatcher,
-    });
-    const info = await infoRes.json().catch(() => ({}));
-    subUrl = info?.data?.subscribe_url;
+  // Stored token expired? Fall back to a fresh login (once) and retry.
+  if (r.unauthorized && usedToken && haveCreds) {
+    authData = await v2boardLogin(ap, base, dispatcher, common);
+    usedToken = false;
+    r = await v2boardDoReset(base, authData, common, dispatcher);
   }
-  if (!subUrl) throw new Error('重置成功但未获取到新订阅链接（V2Board）');
-  return { subUrl };
+  if (r.unauthorized) {
+    throw new Error(usedToken
+      ? '登录令牌无效或已过期（V2Board/Xboard），请在浏览器重新复制 Authorization，或填写账号密码以便自动登录'
+      : '会话被拒绝（V2Board/Xboard）');
+  }
+  if (!r.subUrl) throw new Error('重置成功但未获取到新订阅链接（V2Board/Xboard）');
+  return { subUrl: r.subUrl };
 }
 
 // ---------------- SSPanel-Uim ----------------
@@ -213,6 +242,78 @@ export async function detectPanelType(rawUrl, { proxy, cookie, userAgent } = {})
     return { panel_type: 'v2board', detail: '页面结构疑似 V2Board/Xboard 单页应用' };
   }
   return { panel_type: 'generic', detail: '未能确定面板类型，已回退为「通用（自动识别）」' };
+}
+
+// ---------------- Connection test (dry run, no reset) ----------------
+// Verifies we can authenticate against the panel and read the current
+// subscription link, WITHOUT invalidating anything. Lets operators confirm the
+// airport's account / token / cookie / proxy are usable before relying on the
+// automated reset. Returns { ok, subUrl, via, note }.
+async function v2boardTest(ap) {
+  const base = origin(ap.url);
+  const dispatcher = agent(ap.proxy);
+  const common = { 'Content-Type': 'application/json', 'User-Agent': UA(ap) };
+  if (ap.cookie) common.Cookie = ap.cookie;
+
+  let authData = (ap.auth_token || '').trim() || null;
+  let via = authData ? '登录令牌' : '账号密码登录';
+  if (!authData) authData = await v2boardLogin(ap, base, dispatcher, common);
+  const authHeaders = { ...common, Authorization: authData };
+  delete authHeaders['Content-Type'];
+
+  let info = await v2boardGetSubscribe(base, authHeaders, dispatcher);
+  if (info.unauthorized && ap.account && ap.password) {
+    authData = await v2boardLogin(ap, base, dispatcher, common);
+    via = '账号密码登录（令牌已失效）';
+    info = await v2boardGetSubscribe(base, { ...common, Authorization: authData }, dispatcher);
+  }
+  if (info.unauthorized) throw new Error('鉴权失败：登录令牌无效/过期，且无可用账号密码');
+  return { ok: true, via, subUrl: info.subUrl || null, note: info.subUrl ? '鉴权成功，可读取订阅链接' : '鉴权成功，但未读取到订阅链接' };
+}
+
+async function sspanelTest(ap) {
+  const base = origin(ap.url);
+  const dispatcher = agent(ap.proxy);
+  const form = new URLSearchParams({ email: ap.account, passwd: ap.password, remember_me: 'on' });
+  const loginHeaders = { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': UA(ap) };
+  if (ap.cookie) loginHeaders.Cookie = ap.cookie;
+  const loginRes = await fetch(`${base}/auth/login`, {
+    method: 'POST', headers: loginHeaders, dispatcher, body: form.toString(), redirect: 'manual',
+  });
+  const loginText = await loginRes.text();
+  const challenge = detectChallenge(loginRes.status, loginText, loginRes.headers);
+  if (challenge) throw new Error(`${challenge}。${ANTIBOT_HINT}`);
+  let loginJson = {};
+  try { loginJson = JSON.parse(loginText); } catch { /* html */ }
+  const cookieSet = (loginRes.headers.getSetCookie?.() || []).length > 0 || !!ap.cookie;
+  if (loginJson.ret !== undefined && loginJson.ret !== 1 && !cookieSet) {
+    throw new Error(`登录失败：${loginJson.msg || '账号或密码错误'}（SSPanel）`);
+  }
+  return { ok: true, via: '账号密码登录', subUrl: null, note: '登录成功（SSPanel）；重置链接需实际运行才能确认' };
+}
+
+export async function testAirportConnection(ap) {
+  if (!ap.url) throw new Error('机场未配置网址');
+  if (!ap.auth_token && (!ap.account || !ap.password)) {
+    throw new Error('机场未配置登录账号或密码（或改用「登录令牌」直连）');
+  }
+  switch (ap.panel_type) {
+    case 'v2board':
+    case 'xboard':
+      return v2boardTest(ap);
+    case 'sspanel':
+      return sspanelTest(ap);
+    case 'generic': {
+      const errors = [];
+      for (const [label, fn] of [['V2Board/Xboard', v2boardTest], ['SSPanel', sspanelTest]]) {
+        try { const r = await fn(ap); if (r?.ok) return { ...r, detected: label }; }
+        catch (err) { errors.push(`${label}: ${err.message}`); }
+      }
+      throw new Error(`通用适配器测试均失败：\n${errors.join('\n')}`);
+    }
+    default:
+      throw new Error(`不支持的面板类型：${ap.panel_type}`);
+  }
 }
 
 export async function resetAirportSubscription(ap) {

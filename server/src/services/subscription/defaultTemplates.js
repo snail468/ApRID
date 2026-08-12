@@ -63,7 +63,7 @@ proxy-groups:
     type: select
     proxies:
       - ♻️ 自动选择
-      - 🎯 全球直连
+      - DIRECT
       - <PROXIES>
   - name: ♻️ 自动选择
     type: url-test
@@ -264,7 +264,7 @@ export const SINGBOX = `{
     { "type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 7890 }
   ],
   "outbounds": [
-    { "type": "selector", "tag": "🚀 节点选择", "outbounds": ["♻️ 自动选择", "🎯 全球直连", "<PROXIES>"], "default": "♻️ 自动选择" },
+    { "type": "selector", "tag": "🚀 节点选择", "outbounds": ["♻️ 自动选择", "direct", "<PROXIES>"], "default": "♻️ 自动选择" },
     { "type": "urltest", "tag": "♻️ 自动选择", "outbounds": ["<PROXIES>"], "url": "http://www.gstatic.com/generate_204", "interval": "5m", "tolerance": 50 },
     { "type": "selector", "tag": "💬 AI 平台", "outbounds": ["🚀 节点选择", "♻️ 自动选择", "🎯 全球直连", "<PROXIES>"] },
     { "type": "selector", "tag": "🌍 国外媒体", "outbounds": ["🚀 节点选择", "♻️ 自动选择", "🎯 全球直连", "<PROXIES>"] },
@@ -328,7 +328,7 @@ ipv6 = false
 <PROXIES>
 
 [Proxy Group]
-🚀 节点选择 = select, ♻️ 自动选择, 🎯 全球直连, <PROXY_NAMES>
+🚀 节点选择 = select, ♻️ 自动选择, DIRECT, <PROXY_NAMES>
 ♻️ 自动选择 = url-test, <PROXY_NAMES>, url=http://www.gstatic.com/generate_204, interval=300, tolerance=50
 💬 AI 平台 = select, 🚀 节点选择, ♻️ 自动选择, 🎯 全球直连, <PROXY_NAMES>
 🌍 国外媒体 = select, 🚀 节点选择, ♻️ 自动选择, 🎯 全球直连, <PROXY_NAMES>
@@ -371,7 +371,7 @@ ipv6 = false
 <PROXIES>
 
 [Proxy Group]
-🚀 节点选择 = select,♻️ 自动选择,🎯 全球直连,<PROXY_NAMES>
+🚀 节点选择 = select,♻️ 自动选择,DIRECT,<PROXY_NAMES>
 ♻️ 自动选择 = url-test,<PROXY_NAMES>,url=http://www.gstatic.com/generate_204,interval=300,tolerance=50
 💬 AI 平台 = select,🚀 节点选择,♻️ 自动选择,🎯 全球直连,<PROXY_NAMES>
 🌍 国外媒体 = select,🚀 节点选择,♻️ 自动选择,🎯 全球直连,<PROXY_NAMES>
@@ -416,7 +416,7 @@ geo_location_checker=disable
 <PROXIES>
 
 [policy]
-static=🚀 节点选择, ♻️ 自动选择, 🎯 全球直连, <PROXY_NAMES>
+static=🚀 节点选择, ♻️ 自动选择, direct, <PROXY_NAMES>
 url-latency-benchmark=♻️ 自动选择, <PROXY_NAMES>, check-interval=300, tolerance=50
 static=💬 AI 平台, 🚀 节点选择, ♻️ 自动选择, 🎯 全球直连, <PROXY_NAMES>
 static=🌍 国外媒体, 🚀 节点选择, ♻️ 自动选择, 🎯 全球直连, <PROXY_NAMES>

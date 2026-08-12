@@ -3,6 +3,7 @@ import { parseSubscription, parseUri, parseUserInfo } from '../src/services/node
 import { processAirportNodes, filterNodes } from '../src/services/nodeProcess.js';
 import { toBase64, toClash, toSingbox, toSurge, toQuanX, toLoon, detectFormat } from '../src/services/subscription/converters.js';
 import { DEFAULT_TEMPLATES } from '../src/services/subscription/defaultTemplates.js';
+import { load as yamlLoad } from 'js-yaml';
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) pass++; else { fail++; console.log('  ✗ FAIL:', m); } };
@@ -102,6 +103,27 @@ ok(DEFAULT_TEMPLATES.clash.content.includes('RULE-SET,Telegram,📲 电报信息
 ok(DEFAULT_TEMPLATES.clash.content.includes('rule-providers'), 'clash default keeps rule-providers');
 const clashRendered = toClash(nodes, DEFAULT_TEMPLATES.clash.content);
 ok(!clashRendered.includes('<PROXIES>') && clashRendered.includes('📲 电报信息'), 'clash default template renders w/ groups');
+
+// no ProxyGroup loop: build group->group ref graph, assert acyclic (FlClash rejects loops)
+{
+  const doc = yamlLoad(clashRendered);
+  const groups = new Map((doc['proxy-groups'] || []).map((g) => [g.name, g]));
+  const refs = (name) => (groups.get(name)?.proxies || []).filter((p) => groups.has(p));
+  let cyclic = false;
+  for (const start of groups.keys()) {
+    const seen = new Set();
+    const stack = [start];
+    while (stack.length && !cyclic) {
+      const cur = stack.pop();
+      for (const nxt of refs(cur)) {
+        if (nxt === start) { cyclic = true; break; }
+        if (!seen.has(nxt)) { seen.add(nxt); stack.push(nxt); }
+      }
+    }
+    if (cyclic) break;
+  }
+  ok(!cyclic, 'clash default has no ProxyGroup reference loop');
+}
 const sbRendered = JSON.parse(toSingbox(nodes, DEFAULT_TEMPLATES.singbox.content));
 ok(sbRendered.outbounds.some((o) => o.tag === '💬 AI 平台') && sbRendered.route.rules.length > 3, 'singbox default keeps AI group + route rules');
 ok(!JSON.stringify(sbRendered).includes('<PROXIES>'), 'singbox default placeholder replaced');

@@ -50,6 +50,18 @@ export async function runAirportReset(airportId) {
   }
 }
 
+// Reset every airport that has a subscription link configured. Shared by the
+// "全部机场" button and the scheduler. Never throws — collects per-airport results.
+export async function runAllAirportResets() {
+  const ids = db.prepare("SELECT id FROM airports WHERE sub_url IS NOT NULL AND sub_url != ''").all().map((a) => a.id);
+  const results = [];
+  for (const aid of ids) {
+    try { results.push({ airportId: aid, ok: true, ...(await runAirportReset(aid)) }); }
+    catch (err) { results.push({ airportId: aid, ok: false, error: err.message, taskId: err.taskId }); }
+  }
+  return results;
+}
+
 // "用户流量统计" automation.
 // For each enabled user, the panel measures how much its airport account(s) have
 // consumed since the user's baseline. traffic_used = current airport used - baseline(A).

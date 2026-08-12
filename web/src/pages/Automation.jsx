@@ -14,6 +14,8 @@ export default function Automation({ toast }) {
   const [tasks, setTasks] = useState([]);
   const [running, setRunning] = useState('');   // which automation is running
   const [openLog, setOpenLog] = useState(null); // task id whose log is expanded
+  const [testing, setTesting] = useState(null);  // airport id being tested
+  const [testResult, setTestResult] = useState({}); // airportId -> {ok,msg}
   const timer = useRef(null);
 
   const loadTasks = useCallback(() => API.tasks().then(setTasks).catch(() => {}), []);
@@ -53,6 +55,25 @@ export default function Automation({ toast }) {
 
   const clearTasks = async () => { await API.clearTasks(); loadTasks(); };
 
+  const saveSchedule = async (key, cfg) => {
+    try {
+      await API.saveSchedules({ [key]: cfg });
+      toast.success('定时设置已保存');
+      loadOverview();
+    } catch (e) { toast.error(e.message); }
+  };
+
+  const testAirport = async (id) => {
+    setTesting(id);
+    setTestResult((r) => ({ ...r, [id]: null }));
+    try {
+      const r = await API.testAirportReset(id);
+      setTestResult((res) => ({ ...res, [id]: { ok: true, msg: `✓ ${r.note}（${r.via}）` } }));
+    } catch (e) {
+      setTestResult((res) => ({ ...res, [id]: { ok: false, msg: `✗ ${e.message}` } }));
+    } finally { setTesting(null); }
+  };
+
   const airports = overview?.airports || [];
   const metaOf = (key) => overview?.automations?.find((x) => x.key === key);
 
@@ -69,6 +90,7 @@ export default function Automation({ toast }) {
           <h3 style={{ marginTop: 0 }}>🔄 机场订阅自动重置</h3>
           <p className="muted small">后台登录机场 → 重置订阅 → 回填链接 → 拉取一次。</p>
           <TriggerInfo meta={metaOf('airport_reset')} />
+          <ScheduleEditor meta={metaOf('airport_reset')} onSave={(cfg) => saveSchedule('airport_reset', cfg)} />
           <div className="btn-row" style={{ marginBottom: 12 }}>
             <button className="btn primary" disabled={running === 'airport_reset'} onClick={() => runAirportReset()}>
               {running === 'airport_reset' ? <span className="spin" /> : '▶ 全部机场'}
@@ -82,8 +104,18 @@ export default function Automation({ toast }) {
                   {a.account ? <span className="muted small"> / {a.account}</span> : ''}
                   {a.group_name ? <span className="badge blue" style={{ marginLeft: 6 }}>{a.group_name}</span> : ''}
                   <div className="muted small">上次拉取：{a.last_fetch_at ? fmtDate(a.last_fetch_at) : '从未'}</div>
+                  {testResult[a.id] && (
+                    <div className={`small ${testResult[a.id].ok ? 'ok-text' : 'err-text'}`} style={{ marginTop: 2 }}>
+                      {testResult[a.id].msg}
+                    </div>
+                  )}
                 </div>
-                <button className="btn sm" disabled={!!running} onClick={() => runAirportReset(a.id)}>运行</button>
+                <div className="btn-row">
+                  <button className="btn sm" disabled={testing === a.id} onClick={() => testAirport(a.id)} title="仅验证账号/令牌可用，不重置">
+                    {testing === a.id ? <span className="spin" /> : '测试'}
+                  </button>
+                  <button className="btn sm" disabled={!!running} onClick={() => runAirportReset(a.id)}>运行</button>
+                </div>
               </div>
             ))}
           </div>
@@ -97,6 +129,7 @@ export default function Automation({ toast }) {
             首次运行仅建立基线（A）。
           </p>
           <TriggerInfo meta={metaOf('traffic_stats')} />
+          <ScheduleEditor meta={metaOf('traffic_stats')} onSave={(cfg) => saveSchedule('traffic_stats', cfg)} />
           <button className="btn primary" disabled={running === 'traffic_stats'} onClick={runTraffic}>
             {running === 'traffic_stats' ? <span className="spin" /> : '▶ 立即统计'}
           </button>
@@ -154,7 +187,46 @@ function TriggerInfo({ meta }) {
       ) : (
         <div className="muted small">无自动触发条件</div>
       )}
-      {meta.schedule && <div className="muted small" style={{ marginTop: 2 }}>⏱ 定时：{meta.schedule}</div>}
+      {meta.scheduleText && <div className="muted small" style={{ marginTop: 2 }}>⏱ 定时：{meta.scheduleText}</div>}
+    </div>
+  );
+}
+
+function ScheduleEditor({ meta, onSave }) {
+  const s = meta?.schedule;
+  const [cfg, setCfg] = useState(null);
+  useEffect(() => {
+    if (s) setCfg({ enabled: !!s.enabled, type: s.type || 'daily', hour: s.hour ?? 4, minute: s.minute ?? 0, intervalHours: s.intervalHours ?? 24 });
+  }, [s?.enabled, s?.type, s?.hour, s?.minute, s?.intervalHours]);
+  if (!cfg) return null;
+  const set = (k, v) => setCfg((c) => ({ ...c, [k]: v }));
+
+  return (
+    <div className="schedule-editor">
+      <label className="checkbox-inline">
+        <input type="checkbox" checked={cfg.enabled} onChange={(e) => set('enabled', e.target.checked)} />
+        <span>开启定时任务</span>
+      </label>
+      {cfg.enabled && (
+        <div className="schedule-row">
+          <select value={cfg.type} onChange={(e) => set('type', e.target.value)}>
+            <option value="daily">每天定点</option>
+            <option value="interval">按小时间隔</option>
+          </select>
+          {cfg.type === 'daily' ? (
+            <span className="schedule-inline">
+              <input type="number" min="0" max="23" value={cfg.hour} onChange={(e) => set('hour', e.target.value)} />
+              <span>:</span>
+              <input type="number" min="0" max="59" value={cfg.minute} onChange={(e) => set('minute', e.target.value)} />
+            </span>
+          ) : (
+            <span className="schedule-inline">
+              每 <input type="number" min="1" max="168" value={cfg.intervalHours} onChange={(e) => set('intervalHours', e.target.value)} /> 小时
+            </span>
+          )}
+        </div>
+      )}
+      <button className="btn sm" onClick={() => onSave(cfg)}>保存定时</button>
     </div>
   );
 }

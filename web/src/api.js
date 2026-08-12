@@ -50,6 +50,8 @@ export const API = {
   automationOverview: () => api.get('/api/automation'),
   runAirportReset: (airportId) => api.post('/api/automation/airport-reset', airportId ? { airportId } : {}),
   runTrafficStats: () => api.post('/api/automation/traffic-stats', {}),
+  saveSchedules: (schedules) => api.put('/api/automation/schedule', { schedules }),
+  testAirportReset: (airportId) => api.post('/api/automation/test-reset', { airportId }),
   // airports
   airports: () => api.get('/api/airports'),
   detectPanel: (b) => api.post('/api/airports/detect', b),
