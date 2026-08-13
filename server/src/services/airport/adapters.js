@@ -1,6 +1,6 @@
 import { detectChallenge, ANTIBOT_HINT } from './antibot.js';
 import { applyClearance } from './flaresolverr.js';
-import { proxyDispatcher } from './proxy.js';
+import { proxyDispatcher, xfetch } from './proxy.js';
 
 const UA = (ap) => ap.user_agent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
@@ -33,7 +33,7 @@ const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 // and return the Authorization token.
 async function v2boardLogin(ap, base, dispatcher, common) {
   if (!ap.account || !ap.password) throw new Error('未配置登录账号或密码（V2Board/Xboard）');
-  const loginRes = await fetch(`${base}/api/v1/passport/auth/login`, {
+  const loginRes = await xfetch(`${base}/api/v1/passport/auth/login`, {
     method: 'POST',
     headers: common,
     dispatcher,
@@ -51,7 +51,7 @@ async function v2boardLogin(ap, base, dispatcher, common) {
 
 // Read the current subscribe_url for an authenticated session.
 async function v2boardGetSubscribe(base, authHeaders, dispatcher) {
-  const infoRes = await fetch(`${base}/api/v1/user/getSubscribe`, { method: 'GET', headers: authHeaders, dispatcher });
+  const infoRes = await xfetch(`${base}/api/v1/user/getSubscribe`, { method: 'GET', headers: authHeaders, dispatcher });
   if (infoRes.status === 401 || infoRes.status === 403) return { unauthorized: true };
   const info = await infoRes.json().catch(() => ({}));
   return { subUrl: info?.data?.subscribe_url || null };
@@ -64,9 +64,9 @@ async function v2boardDoReset(base, auth, common, dispatcher) {
   delete authHeaders['Content-Type'];
 
   // resetSecurity is GET on stock V2Board; some forks expose it as POST.
-  let res = await fetch(`${base}/api/v1/user/resetSecurity`, { method: 'GET', headers: authHeaders, dispatcher });
+  let res = await xfetch(`${base}/api/v1/user/resetSecurity`, { method: 'GET', headers: authHeaders, dispatcher });
   if (res.status === 405) {
-    res = await fetch(`${base}/api/v1/user/resetSecurity`, { method: 'POST', headers: authHeaders, dispatcher });
+    res = await xfetch(`${base}/api/v1/user/resetSecurity`, { method: 'POST', headers: authHeaders, dispatcher });
   }
   if (res.status === 401 || res.status === 403) return { unauthorized: true };
   const reset = await res.json().catch(() => ({}));
@@ -131,7 +131,7 @@ async function sspanelReset(ap) {
     'User-Agent': UA(ap),
   };
   if (ap.cookie) loginHeaders.Cookie = ap.cookie;
-  const loginRes = await fetch(`${base}/auth/login`, {
+  const loginRes = await xfetch(`${base}/auth/login`, {
     method: 'POST',
     headers: loginHeaders,
     dispatcher,
@@ -151,18 +151,18 @@ async function sspanelReset(ap) {
   const authHeaders = { 'User-Agent': UA(ap), Cookie: cookie };
 
   // 2. reset subscription token
-  const resetRes = await fetch(`${base}/user/reset_URL`, {
+  const resetRes = await xfetch(`${base}/user/reset_URL`, {
     method: 'GET',
     headers: authHeaders,
     dispatcher,
   }).catch(() => null);
   // some SSPanel forks use POST /user/subscribe/reset — best-effort fallback
   if (!resetRes || resetRes.status >= 400) {
-    await fetch(`${base}/user/subscribe/reset`, { method: 'POST', headers: authHeaders, dispatcher }).catch(() => null);
+    await xfetch(`${base}/user/subscribe/reset`, { method: 'POST', headers: authHeaders, dispatcher }).catch(() => null);
   }
 
   // 3. read profile page to extract the new subscription link
-  const profRes = await fetch(`${base}/user`, { headers: authHeaders, dispatcher });
+  const profRes = await xfetch(`${base}/user`, { headers: authHeaders, dispatcher });
   const html = await profRes.text();
   const m =
     html.match(/https?:\/\/[^\s"'<>]+\/(?:link|sub|s)\/[A-Za-z0-9]+/) ||
@@ -205,7 +205,7 @@ export async function detectPanelType(rawUrl, { proxy, cookie, userAgent } = {})
 
   // 1) V2Board / Xboard expose a guest config JSON endpoint
   try {
-    const res = await fetch(`${base}/api/v1/guest/comm/config`, { headers, dispatcher });
+    const res = await xfetch(`${base}/api/v1/guest/comm/config`, { headers, dispatcher });
     if (res.ok) {
       const txt = await res.text();
       try {
@@ -222,7 +222,7 @@ export async function detectPanelType(rawUrl, { proxy, cookie, userAgent } = {})
   let html = '';
   let res;
   try {
-    res = await fetch(base, { headers, dispatcher, redirect: 'follow' });
+    res = await xfetch(base, { headers, dispatcher, redirect: 'follow' });
     html = (await res.text()).slice(0, 20000);
   } catch (e) {
     throw new Error(`无法访问机场网址：${e.message}`);
@@ -278,7 +278,7 @@ async function sspanelTest(ap) {
   const form = new URLSearchParams({ email: ap.account, passwd: ap.password, remember_me: 'on' });
   const loginHeaders = { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': UA(ap) };
   if (ap.cookie) loginHeaders.Cookie = ap.cookie;
-  const loginRes = await fetch(`${base}/auth/login`, {
+  const loginRes = await xfetch(`${base}/auth/login`, {
     method: 'POST', headers: loginHeaders, dispatcher, body: form.toString(), redirect: 'manual',
   });
   const loginText = await loginRes.text();

@@ -1,5 +1,5 @@
 import { db } from '../../db.js';
-import { proxyDispatcher } from './proxy.js';
+import { proxyDispatcher, xfetch } from './proxy.js';
 import { parseSubscription, parseUserInfo } from '../nodeParser.js';
 import { processAirportNodes } from '../nodeProcess.js';
 import { detectChallenge, ANTIBOT_HINT } from './antibot.js';
@@ -17,7 +17,7 @@ export async function httpGet(url, { headers = {}, proxy, method = 'GET', body, 
   const opts = { method, headers: finalHeaders, redirect: 'follow' };
   if (body) opts.body = body;
   if (proxy) opts.dispatcher = proxyDispatcher(proxy);
-  const res = await fetch(url, opts);
+  const res = await xfetch(url, opts);
   const text = await res.text();
   return { status: res.status, headers: res.headers, text };
 }
