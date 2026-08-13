@@ -19,6 +19,7 @@ export default function Airports({ toast }) {
   const { data: rows = [], loading, refresh } = useCachedResource('airports', () => API.airports());
   const { data: groups = [], refresh: refreshGroups } = useCachedResource('groups:airport', () => API.groups('airport'));
   const [editing, setEditing] = useState(null);
+  const [manual, setManual] = useState(null);
   const [busy, setBusy] = useState({});
   const [showGroups, setShowGroups] = useState(false);
   const [batchGroup, setBatchGroup] = useState('');
@@ -128,6 +129,7 @@ export default function Airports({ toast }) {
                     <td className="actions">
                       <button className="btn sm" disabled={busy[a.id]} onClick={() => doFetch(a.id)}>{busy[a.id] === 'fetch' ? <span className="spin" /> : '拉取'}</button>
                       <button className="btn sm" disabled={busy[a.id]} onClick={() => doReset(a.id)} title="自动重置订阅">{busy[a.id] === 'reset' ? <span className="spin" /> : '重置'}</button>
+                      <button className="btn sm" onClick={() => setManual(a)} title="半自动：自己登录机场重置后粘贴新链接">手动重置</button>
                       <button className="btn sm" onClick={() => setEditing(a)}>编辑</button>
                       <button className="btn sm danger" onClick={() => doDelete(a.id)}>删</button>
                     </td>
@@ -150,6 +152,7 @@ export default function Airports({ toast }) {
             <div className="btn-row" style={{ marginTop: 10 }}>
               <button className="btn sm" onClick={() => doFetch(a.id)}>拉取</button>
               <button className="btn sm" onClick={() => doReset(a.id)}>重置</button>
+              <button className="btn sm" onClick={() => setManual(a)}>手动重置</button>
               <button className="btn sm" onClick={() => setEditing(a)}>编辑</button>
               <button className="btn sm danger" onClick={() => doDelete(a.id)}>删</button>
             </div>
@@ -158,6 +161,7 @@ export default function Airports({ toast }) {
       </div>
 
       {editing && <AirportModal airport={editing} groups={groups} toast={toast} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); refreshGroups(); }} />}
+      {manual && <ManualResetModal airport={manual} toast={toast} onClose={() => setManual(null)} onDone={() => { setManual(null); invalidate('nodes:'); load(); }} />}
       {showGroups && <GroupManagerModal kind="airport" title="机场分组管理" toast={toast} onClose={() => setShowGroups(false)} onChanged={() => { refreshGroups(); load(); }} />}
       {confirmNode}
     </>
@@ -198,7 +202,7 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
     remark: airport.remark || '', proxy: airport.proxy || '',
     user_agent: airport.user_agent || '', cookie: airport.cookie || '',
     auth_token: airport.auth_token || '',
-    reset_mode: airport.reset_mode || 'http', cdp_endpoint: airport.cdp_endpoint || '',
+    reset_mode: airport.reset_mode || 'http',
     flaresolverr_url: airport.flaresolverr_url || '',
     request_headers: safeParse(airport.request_headers),
     node_filter: safeParse(airport.node_filter),
@@ -287,15 +291,9 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
           <select value={f.reset_mode} onChange={(e) => set('reset_mode', e.target.value)}>
             <option value="http">HTTP 轻量（默认，直接请求接口）</option>
             <option value="flaresolverr">FlareSolverr（推荐，专治 Cloudflare）</option>
-            <option value="browser">浏览器模式（CDP 侧车，绕过 CF/签名）</option>
+            <option value="manual">手动重置（半自动，自己登录后粘贴新链接）</option>
           </select>
         </div>
-        {f.reset_mode === 'browser' && (
-          <div className="field">
-            <label>CDP 端点（留空=用默认 browserless 侧车）</label>
-            <input value={f.cdp_endpoint} onChange={(e) => set('cdp_endpoint', e.target.value)} placeholder="http://browserless:3000" />
-          </div>
-        )}
         {f.reset_mode === 'flaresolverr' && (
           <div className="field">
             <label>FlareSolverr 地址（留空=用默认侧车）</label>
@@ -312,11 +310,10 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
           ② 给上方「拉取代理」配一个干净/住宅代理——机房 IP 常被加强挑战，配代理后 FlareSolverr 与重置会走同一代理，成功率更高。
         </div>
       )}
-      {f.reset_mode === 'browser' && (
+      {f.reset_mode === 'manual' && (
         <div className="muted small" style={{ marginTop: -6, marginBottom: 4 }}>
-          浏览器模式通过 docker-compose 中的 <code>browserless</code> 侧车打开机场页面，在真实浏览器上下文里完成登录并重置——
-          天然携带 cf_clearance、复用页面请求签名。但无头浏览器可能被 Cloudflare 托管挑战识别；这类站点更推荐上面的 FlareSolverr。
-          仍需填账号密码或登录令牌。请先用「自动化」页的「测试」验证。
+          手动重置模式：面板不再自动登录。当某机场 Cloudflare 无法自动绕过时用它——在机场列表点「手动重置」，
+          按引导登录机场重置订阅，把新订阅链接粘回，面板保存并自动拉取一次。自动化/定时会跳过该机场。
         </div>
       )}
 
@@ -324,6 +321,54 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
       <NodeProcessingEditor value={f.node_filter} onChange={(v) => set('node_filter', v)} />
 
       <div className="field" style={{ marginTop: 14 }}><label>备注</label><input value={f.remark} onChange={(e) => set('remark', e.target.value)} /></div>
+    </Modal>
+  );
+}
+
+/* ---------------- 手动重置（半自动兜底）---------------- */
+function ManualResetModal({ airport, toast, onClose, onDone }) {
+  const [subUrl, setSubUrl] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    if (!/^https?:\/\//i.test(subUrl.trim())) return toast.error('请粘贴有效的新订阅链接（http/https 开头）');
+    setSaving(true);
+    try {
+      const r = await API.manualResetAirport(airport.id, subUrl.trim());
+      toast.success(`已保存并拉取，${r.count} 个节点`);
+      onDone();
+    } catch (e) { toast.error(e.message); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <Modal title={`手动重置 · ${airport.name}`} onClose={onClose}
+      footer={<>
+        <button className="btn" onClick={onClose}>取消</button>
+        <button className="btn primary" onClick={submit} disabled={saving}>{saving ? <span className="spin" /> : '保存并拉取'}</button>
+      </>}>
+      <ol className="manual-steps">
+        <li>
+          打开机场登录页并登录：
+          {airport.url
+            ? <a href={airport.url} target="_blank" rel="noreferrer" style={{ marginLeft: 6 }}>去登录 ↗</a>
+            : <span className="muted"> 未配置机场网址</span>}
+        </li>
+        <li>
+          账户：
+          {airport.account
+            ? <span className="pill-copy mono" onClick={() => copyText(airport.account, toast)} title="点击复制">{airport.account}</span>
+            : <span className="muted">未填</span>}
+          {airport.password && <span className="pill-copy small muted" style={{ marginLeft: 6 }} onClick={() => copyText(airport.password, toast)} title="点击复制密码">🔑 复制密码</span>}
+        </li>
+        <li>在机场用户中心「重置订阅 / 重置安全链接」，复制生成的<strong>新订阅链接</strong>。</li>
+        <li>粘贴到下方，点「保存并拉取」。</li>
+      </ol>
+      <div className="field" style={{ marginTop: 8 }}>
+        <label>新订阅链接</label>
+        <input value={subUrl} onChange={(e) => setSubUrl(e.target.value)} placeholder="https://机场域名/api/v1/client/subscribe?token=..." />
+      </div>
+      {airport.sub_url && <div className="muted small">当前链接：{airport.sub_url}</div>}
     </Modal>
   );
 }

@@ -63,6 +63,7 @@ export const API = {
   fetchAirport: (id) => api.post(`/api/airports/${id}/fetch`),
   batchFetchAirports: (ids) => api.post('/api/airports/batch/fetch', { ids }),
   resetAirport: (id) => api.post(`/api/airports/${id}/reset`),
+  manualResetAirport: (id, sub_url) => api.post(`/api/airports/${id}/manual-reset`, { sub_url }),
   // nodes
   nodes: (qs = '') => api.get(`/api/nodes${qs}`),
   deleteNode: (id) => api.del(`/api/nodes/${id}`),

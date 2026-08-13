@@ -27,7 +27,7 @@ export async function runAirportReset(airportId) {
   try {
     const ap = db.prepare('SELECT * FROM airports WHERE id = ?').get(airportId);
     if (!ap) throw new Error('机场不存在');
-    appendLog(taskId, `开始重置机场「${ap.name}」订阅 (${ap.panel_type}${ap.reset_mode === 'browser' ? ' · 浏览器模式' : ''})`);
+    appendLog(taskId, `开始重置机场「${ap.name}」订阅 (${ap.panel_type}${ap.reset_mode === 'flaresolverr' ? ' · FlareSolverr' : ''})`);
 
     const { subUrl, detected } = await resetAirportSubscription(ap, { log: (line) => appendLog(taskId, line) });
     if (detected) appendLog(taskId, `通用适配器识别面板类型：${detected}`);
@@ -43,6 +43,32 @@ export async function runAirportReset(airportId) {
 
     finishTask(taskId, 'success');
     return { taskId, subUrl, count };
+  } catch (err) {
+    appendLog(taskId, `失败：${err.message}`);
+    finishTask(taskId, 'failed');
+    throw Object.assign(err, { taskId });
+  }
+}
+
+// "手动重置"（半自动兜底）：操作者在自己浏览器登录机场重置后，把新订阅链接粘回；
+// 面板保存并拉取一次，全程记入任务日志（旧→新链接、节点数）。
+export async function runManualReset(airportId, subUrl) {
+  const taskId = createTask('airport_reset', airportId);
+  try {
+    const ap = db.prepare('SELECT * FROM airports WHERE id = ?').get(airportId);
+    if (!ap) throw new Error('机场不存在');
+    const next = (subUrl || '').trim();
+    if (!/^https?:\/\//i.test(next)) throw new Error('请粘贴有效的新订阅链接（以 http/https 开头）');
+    appendLog(taskId, `手动重置机场「${ap.name}」`);
+    appendLog(taskId, `旧订阅链接：${ap.sub_url || '（无）'}`);
+    appendLog(taskId, `新订阅链接：${next}`);
+    db.prepare('UPDATE airports SET sub_url = ?, updated_at = ? WHERE id = ?').run(next, Date.now(), airportId);
+    appendLog(taskId, '已保存新链接到面板，开始拉取…');
+    const { count, traffic } = await fetchAirport(airportId);
+    appendLog(taskId, `拉取完成，解析 ${count} 个节点` +
+      (traffic.expire ? `，账户到期 ${new Date(traffic.expire).toLocaleDateString('zh-CN')}` : ''));
+    finishTask(taskId, 'success');
+    return { taskId, count };
   } catch (err) {
     appendLog(taskId, `失败：${err.message}`);
     finishTask(taskId, 'failed');

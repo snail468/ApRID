@@ -2,7 +2,7 @@ import express from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
 import { fetchAirport } from '../services/airport/fetch.js';
-import { runAirportReset } from '../services/automation.js';
+import { runAirportReset, runManualReset } from '../services/automation.js';
 import { detectPanelType } from '../services/airport/adapters.js';
 
 const router = express.Router();
@@ -10,7 +10,7 @@ router.use(requireAuth);
 
 const FIELDS = ['name', 'url', 'account', 'password', 'sub_url', 'panel_type',
   'request_headers', 'user_agent', 'cookie', 'auth_token', 'proxy', 'group_name', 'remark', 'node_filter',
-  'expire_at', 'used_traffic', 'total_traffic', 'reset_mode', 'cdp_endpoint', 'flaresolverr_url'];
+  'expire_at', 'used_traffic', 'total_traffic', 'reset_mode', 'flaresolverr_url'];
 
 function normalize(body) {
   const out = {};
@@ -122,6 +122,16 @@ router.post('/batch/fetch', async (req, res) => {
 router.post('/:id/reset', async (req, res) => {
   try {
     const r = await runAirportReset(Number(req.params.id));
+    res.json({ ok: true, ...r });
+  } catch (err) {
+    res.status(400).json({ error: err.message, taskId: err.taskId });
+  }
+});
+
+// semi-automatic manual reset: operator pastes the new sub link, panel saves + pulls
+router.post('/:id/manual-reset', async (req, res) => {
+  try {
+    const r = await runManualReset(Number(req.params.id), req.body?.sub_url);
     res.json({ ok: true, ...r });
   } catch (err) {
     res.status(400).json({ error: err.message, taskId: err.taskId });

@@ -140,8 +140,8 @@ function ensureColumns(table, columns) {
 }
 ensureColumns('airports', {
   user_agent: 'TEXT', cookie: 'TEXT', auth_token: 'TEXT',
-  // reset_mode: 'http' (default) | 'browser' (CDP side-car) | 'flaresolverr'
-  reset_mode: "TEXT DEFAULT 'http'", cdp_endpoint: 'TEXT', flaresolverr_url: 'TEXT',
+  // reset_mode: 'http' (default) | 'flaresolverr' | 'manual'
+  reset_mode: "TEXT DEFAULT 'http'", flaresolverr_url: 'TEXT',
 });
 ensureColumns('users', {
   traffic_base: 'INTEGER', traffic_used: 'INTEGER',

@@ -39,24 +39,9 @@
 - 说明：`cf_clearance` 有时效（约几十分钟~数小时），过期后下次运行会自动重新解一次，无需手动维护。
 - **解挑战超时/失败怎么办**（魔戒等强挑战站点）：① 调大 `FLARESOLVERR_TIMEOUT`（compose 里，如 `180000`）；② 给该机场配一个**干净/住宅代理**（机场编辑页「拉取代理」）——机房/VPS IP 常被 Cloudflare 加强挑战，配代理后 FlareSolverr 解挑战与后续重置都会走同一代理，`cf_clearance` 绑定该代理 IP 依旧一致，成功率显著更高；③ 换更新的 FlareSolverr 镜像；④ 若站点用的是 Turnstile 交互式验证，目前无法自动绕过，只能手动更新订阅链接后执行「拉取」。
 
-#### 浏览器模式（绕过 CF / 接口签名的另一方案，可选）
+#### 手动重置（半自动兜底）
 
-对付得最凶的机场（Cloudflare 5 秒盾、Turnstile、接口带 `X-Signature`/RSA 加密），面板支持**浏览器模式**：不再自己拼 HTTP 请求，而是通过 CDP 接管一个真实 Chromium，在**机场页面自己的 JS 上下文里**完成登录与重置——请求由真实浏览器在机场域名下发出，天然携带 `cf_clearance`、复用页面的请求签名，绕过绝大多数防护。
-
-- 主镜像只含 `playwright-core`（几 MB，不含浏览器）；浏览器由 `docker-compose.yml` 里的可选 **`browserless`** 侧车提供，用不到可整段删除。
-- **必须用带 browserless 的 `docker-compose.yml` 一起启动**（`docker compose up -d`）——单独 `docker run` 或旧版 compose 里没有 browserless，会报 `ENOTFOUND browserless`。
-- browserless v2 需要 token：compose 里 browserless 的 `TOKEN` 与 aprid 的 `BROWSER_CDP_ENDPOINT=ws://browserless:3000?token=...` 必须一致（把示例里的 `aprid-browser-token` 改成你自己的随机串）。
-- 用法：机场编辑页「自动重置方式」选 **浏览器模式**，仍填账号密码或登录令牌；`Cookie` 字段可粘贴 `cf_clearance` 提高通过率；CDP 端点留空即用默认侧车（也可指向你自建/远程的浏览器）。
-- 硬性点击验证码（极验滑块等）已预留打码接口（`CAPTCHA_PROVIDER`/`CAPTCHA_API_KEY`），默认不启用。
-- 启用前请务必先用「自动化」页的 **测试** 按钮验证侧车连通与登录可用。
-
-**从零开始三步**：① 用最新 `docker-compose.yml`（含 browserless）执行 `docker compose pull && docker compose up -d`；② `docker compose ps` 确认 `aprid` 与 `browserless` 都是 Up；③ 机场编辑页把「自动重置方式」改成浏览器模式并保存，去「自动化」页点该机场「测试」，显示绿色 ✓ 即成功。
-
-**遇到 Cloudflare「Just a moment…」怎么办**：面板已会在打开页面后**自动等待 CF 挑战通过**再发接口请求，并伪装成正常桌面 Chrome。但默认的 **browserless 无头 Chromium 仍可能被“托管挑战（Managed Challenge）”识别**（如魔戒等）。此时按顺序尝试：
-
-1. **贴 cf_clearance**：在你自己浏览器过验证后，从开发者工具复制 `cf_clearance` 到机场 **Cookie** 字段——注意它与 **出口 IP + UA** 绑定，需与侧车一致才有效（同机部署时可行）；
-2. **换有头/反检测浏览器**做 CDP 侧车：把 `cdp_endpoint` 指向一个 headful 或反检测（stealth / camoufox）的浏览器；
-3. **上 FlareSolverr**（专治 CF）：单独跑 `ghcr.io/flaresolverr/flaresolverr`，用它拿到 cf_clearance 后回填 Cookie，再用普通 HTTP 模式重置——如需面板内置对接 FlareSolverr，提 issue 即可加。
+极少数机场（如上了 Cloudflare Turnstile 交互验证）任何全自动方案都可能过不去。这时用**手动重置**：把机场「自动重置方式」设为 **手动重置**，在机场列表点 **手动重置** 按钮——弹窗里一键跳转机场登录页、一键复制账号密码，你在自己浏览器里登录并重置订阅，把**新订阅链接**粘回，面板保存并自动拉取一次。整个过程仍在「自动化」任务日志留痕（旧链接→新链接、拉取节点数）。手动重置模式的机场会被自动化/定时**跳过**，不会瞎跑报错。
 
 ## 部署
 

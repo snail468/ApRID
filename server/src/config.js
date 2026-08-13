@@ -18,10 +18,6 @@ export const config = {
   sessionHours: parseInt(process.env.SESSION_HOURS || '24', 10),
   publicDir: path.join(__dirname, '..', 'public'),
   isProd: process.env.NODE_ENV === 'production',
-  // Browser-mode airport reset: default CDP endpoint of a side-car browser
-  // (the optional `browserless` service in docker-compose). Airports can
-  // override this per-airport. Used only when an airport's reset_mode='browser'.
-  browserCdpEndpoint: process.env.BROWSER_CDP_ENDPOINT || 'http://browserless:3000',
   // FlareSolverr endpoint for the 'flaresolverr' reset mode (solves Cloudflare
   // and returns cf_clearance). Airports can override per-airport.
   flaresolverrUrl: process.env.FLARESOLVERR_URL || 'http://flaresolverr:8191',
