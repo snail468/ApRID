@@ -29,9 +29,10 @@ export async function runAirportReset(airportId) {
     if (!ap) throw new Error('机场不存在');
     appendLog(taskId, `开始重置机场「${ap.name}」订阅 (${ap.panel_type}${ap.reset_mode === 'flaresolverr' ? ' · FlareSolverr' : ''})`);
 
-    const { subUrl, detected } = await resetAirportSubscription(ap, { log: (line) => appendLog(taskId, line) });
+    const { subUrl, detected, changed } = await resetAirportSubscription(ap, { log: (line) => appendLog(taskId, line) });
     if (detected) appendLog(taskId, `通用适配器识别面板类型：${detected}`);
-    appendLog(taskId, `重置成功，新订阅链接：${subUrl}`);
+    appendLog(taskId, `重置成功，新订阅链接：${subUrl}` +
+      (changed === true ? '（已确认链接变化）' : changed === false ? '（⚠ 链接未变化）' : ''));
 
     db.prepare('UPDATE airports SET sub_url = ?, updated_at = ? WHERE id = ?')
       .run(subUrl, Date.now(), airportId);

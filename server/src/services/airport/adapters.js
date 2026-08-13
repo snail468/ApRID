@@ -57,27 +57,45 @@ async function v2boardGetSubscribe(base, authHeaders, dispatcher) {
   return { subUrl: info?.data?.subscribe_url || null };
 }
 
-// Trigger the reset action, then confirm the new subscribe_url. Returns
-// { unauthorized } when the token/session was rejected so the caller can re-login.
-async function v2boardDoReset(base, auth, common, dispatcher) {
+// Trigger the reset action, then confirm the new subscribe_url. Verifies the link
+// actually changed vs `beforeUrl` — stock resetSecurity rotates the token and
+// returns a new URL; some forks no-op on GET, so we retry with POST before giving
+// up. Returns { subUrl, changed } or { unauthorized } for the caller to re-login.
+async function v2boardDoReset(base, auth, common, dispatcher, beforeUrl) {
   const authHeaders = { ...common, Authorization: auth };
   delete authHeaders['Content-Type'];
 
-  // resetSecurity is GET on stock V2Board; some forks expose it as POST.
-  let res = await xfetch(`${base}/api/v1/user/resetSecurity`, { method: 'GET', headers: authHeaders, dispatcher });
-  if (res.status === 405) {
-    res = await xfetch(`${base}/api/v1/user/resetSecurity`, { method: 'POST', headers: authHeaders, dispatcher });
-  }
-  if (res.status === 401 || res.status === 403) return { unauthorized: true };
-  const reset = await res.json().catch(() => ({}));
-  let subUrl = typeof reset?.data === 'string' ? reset.data : null;
+  const call = async (method) => {
+    const res = await xfetch(`${base}/api/v1/user/resetSecurity`, { method, headers: authHeaders, dispatcher });
+    let json = {}; try { json = await res.json(); } catch { /* non-json */ }
+    return { status: res.status, json };
+  };
+  const pickUrl = (j) => (typeof j?.data === 'string' && /^https?:/i.test(j.data)) ? j.data : null;
 
+  let rr = await call('GET');
+  if (rr.status === 404 || rr.status === 405) rr = await call('POST');
+  if (rr.status === 401 || rr.status === 403) return { unauthorized: true };
+
+  let subUrl = pickUrl(rr.json);
   if (!subUrl) {
     const info = await v2boardGetSubscribe(base, authHeaders, dispatcher);
     if (info.unauthorized) return { unauthorized: true };
     subUrl = info.subUrl;
   }
-  return { subUrl };
+
+  // If the link didn't change, some forks need an explicit POST to actually
+  // rotate the token — try once more and re-read.
+  if (beforeUrl && subUrl && subUrl === beforeUrl) {
+    const rp = await call('POST');
+    const reposted = pickUrl(rp.json);
+    if (reposted) subUrl = reposted;
+    else {
+      const info = await v2boardGetSubscribe(base, authHeaders, dispatcher);
+      if (info.subUrl) subUrl = info.subUrl;
+    }
+  }
+
+  return { subUrl, changed: beforeUrl != null ? (subUrl !== beforeUrl) : null };
 }
 
 async function v2boardReset(ap) {
@@ -93,13 +111,26 @@ async function v2boardReset(ap) {
   let usedToken = !!authData;
   if (!authData) authData = await v2boardLogin(ap, base, dispatcher, common);
 
-  let r = await v2boardDoReset(base, authData, common, dispatcher);
+  // Capture the current link first, so we can verify the reset actually changed it.
+  const readBefore = async (auth) => {
+    const h = { ...common, Authorization: auth };
+    delete h['Content-Type'];
+    return v2boardGetSubscribe(base, h, dispatcher);
+  };
+  let beforeInfo = await readBefore(authData);
+  if (beforeInfo.unauthorized && usedToken && haveCreds) {
+    authData = await v2boardLogin(ap, base, dispatcher, common);
+    usedToken = false;
+    beforeInfo = await readBefore(authData);
+  }
+  const beforeUrl = beforeInfo.subUrl || null;
 
+  let r = await v2boardDoReset(base, authData, common, dispatcher, beforeUrl);
   // Stored token expired? Fall back to a fresh login (once) and retry.
   if (r.unauthorized && usedToken && haveCreds) {
     authData = await v2boardLogin(ap, base, dispatcher, common);
     usedToken = false;
-    r = await v2boardDoReset(base, authData, common, dispatcher);
+    r = await v2boardDoReset(base, authData, common, dispatcher, beforeUrl);
   }
   if (r.unauthorized) {
     throw new Error(usedToken
@@ -107,7 +138,11 @@ async function v2boardReset(ap) {
       : '会话被拒绝（V2Board/Xboard）');
   }
   if (!r.subUrl) throw new Error('重置成功但未获取到新订阅链接（V2Board/Xboard）');
-  return { subUrl: r.subUrl };
+  // Honest failure: the API returned OK but the subscription link is unchanged.
+  if (beforeUrl && r.subUrl === beforeUrl) {
+    throw new Error('已调用重置接口，但订阅链接未发生变化——该机场可能：① 重置端点与标准 V2Board 不同；② 订阅链接为固定式（重置只轮换内部信息、URL 不变）。请改用「手动重置」在机场后台核实真实的重置入口。');
+  }
+  return { subUrl: r.subUrl, changed: r.changed };
 }
 
 // ---------------- SSPanel-Uim ----------------
