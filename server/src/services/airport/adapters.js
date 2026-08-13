@@ -1,6 +1,6 @@
-import { ProxyAgent } from 'undici';
 import { detectChallenge, ANTIBOT_HINT } from './antibot.js';
 import { applyClearance } from './flaresolverr.js';
+import { proxyDispatcher } from './proxy.js';
 
 const UA = (ap) => ap.user_agent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
@@ -16,7 +16,7 @@ const UA = (ap) => ap.user_agent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) A
 // panel_type: 'v2board' | 'xboard' | 'sspanel'
 
 function agent(proxy) {
-  return proxy ? new ProxyAgent(proxy) : undefined;
+  return proxyDispatcher(proxy);
 }
 
 function origin(url) {
