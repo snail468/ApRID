@@ -41,6 +41,10 @@ export const API = {
   devices: () => api.get('/api/settings/devices'),
   revokeDevice: (id) => api.del(`/api/settings/devices/${id}`),
   revokeAllDevices: () => api.del('/api/settings/devices'),
+  // notify (告警通知)
+  getNotify: () => api.get('/api/settings/notify'),
+  saveNotify: (b) => api.put('/api/settings/notify', b),
+  testNotify: () => api.post('/api/settings/notify/test', {}),
   // groups
   groups: (kind) => api.get(`/api/groups?kind=${kind}`),
   createGroup: (b) => api.post('/api/groups', b),
@@ -50,6 +54,7 @@ export const API = {
   automationOverview: () => api.get('/api/automation'),
   runAirportReset: (airportId) => api.post('/api/automation/airport-reset', airportId ? { airportId } : {}),
   runTrafficStats: () => api.post('/api/automation/traffic-stats', {}),
+  runAlerts: () => api.post('/api/automation/alerts', {}),
   saveSchedules: (schedules) => api.put('/api/automation/schedule', { schedules }),
   testAirportReset: (airportId) => api.post('/api/automation/test-reset', { airportId }),
   // airports

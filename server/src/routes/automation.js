@@ -1,7 +1,7 @@
 import express from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
-import { runAirportReset, runAllAirportResets, runTrafficStats } from '../services/automation.js';
+import { runAirportReset, runAllAirportResets, runTrafficStats, runAlertCheck } from '../services/automation.js';
 import { testAirportConnection } from '../services/airport/adapters.js';
 import { getSchedules, setSchedules, describeSchedule } from '../services/scheduler.js';
 
@@ -36,6 +36,18 @@ router.get('/', (req, res) => {
         autoTriggers: [],
         schedule: schedules.traffic_stats,
         scheduleText: describeSchedule(schedules.traffic_stats),
+      },
+      {
+        key: 'alerts',
+        name: '到期/超限告警',
+        last: last('alerts'),
+        manual: true,
+        autoTriggers: [
+          '用户到期或流量超限 → 发送用户端告警（含免登录回填链接）',
+          '机场用量≥99% 或到期≤1天 → 发送机场端告警（含免登录拉取按钮）',
+        ],
+        schedule: schedules.alerts,
+        scheduleText: describeSchedule(schedules.alerts),
       },
     ],
     airports,
@@ -82,6 +94,16 @@ router.post('/airport-reset', async (req, res) => {
 router.post('/traffic-stats', async (req, res) => {
   try {
     const r = await runTrafficStats({ refetch: req.body?.refetch !== false });
+    res.json({ ok: true, ...r });
+  } catch (err) {
+    res.status(400).json({ error: err.message, taskId: err.taskId });
+  }
+});
+
+// Run "到期/超限告警".
+router.post('/alerts', async (req, res) => {
+  try {
+    const r = await runAlertCheck();
     res.json({ ok: true, ...r });
   } catch (err) {
     res.status(400).json({ error: err.message, taskId: err.taskId });

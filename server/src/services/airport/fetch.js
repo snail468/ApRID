@@ -3,6 +3,7 @@ import { proxyDispatcher, xfetch } from './proxy.js';
 import { parseSubscription, parseUserInfo } from '../nodeParser.js';
 import { processAirportNodes } from '../nodeProcess.js';
 import { detectChallenge, ANTIBOT_HINT } from './antibot.js';
+import { accumulateUsed } from '../util.js';
 
 export const DEFAULT_UA = 'ClashMetaForAndroid/2.10.1.Meta';
 
@@ -46,6 +47,14 @@ export async function fetchAirport(airportId) {
 
   const info = parseUserInfo(resHeaders.get('subscription-userinfo'));
 
+  // Advance the monotonic cumulative counter only when the airport reported a
+  // fresh usage figure; this is what user traffic stats (B - A) are measured on,
+  // and it survives airport-side billing resets. See accumulateUsed().
+  let cum = null, last = null;
+  if (info.used != null) {
+    ({ cum, last } = accumulateUsed(ap.used_traffic_cum, ap.used_traffic_last, info.used));
+  }
+
   const now = Date.now();
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM nodes WHERE airport_id = ?').run(airportId);
@@ -57,9 +66,10 @@ export async function fetchAirport(airportId) {
     }
     db.prepare(
       `UPDATE airports SET last_fetch_at = ?, used_traffic = COALESCE(?, used_traffic),
+       used_traffic_cum = COALESCE(?, used_traffic_cum), used_traffic_last = COALESCE(?, used_traffic_last),
        total_traffic = COALESCE(?, total_traffic), expire_at = COALESCE(?, expire_at), updated_at = ?
        WHERE id = ?`
-    ).run(now, info.used ?? null, info.total ?? null, info.expire ?? null, now, airportId);
+    ).run(now, info.used ?? null, cum, last, info.total ?? null, info.expire ?? null, now, airportId);
   });
   tx();
 

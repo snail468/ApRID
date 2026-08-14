@@ -4,7 +4,7 @@ import { fmtDate } from '../ui.jsx';
 import { invalidate } from '../store.js';
 
 const TASK_LABEL = {
-  airport_reset: '机场订阅重置', traffic_stats: '用户流量统计',
+  airport_reset: '机场订阅重置', traffic_stats: '用户流量统计', alerts: '告警检查',
   node_fetch: '节点拉取', latency: '延迟检测',
 };
 const STATUS_BADGE = { success: 'green', failed: 'red', running: 'blue', pending: 'gray' };
@@ -49,6 +49,14 @@ export default function Automation({ toast }) {
       const r = await API.runTrafficStats();
       toast.success(`流量统计完成：${r.users} 用户，${r.cutoff} 个被切断`);
       invalidate('users');
+    } catch (e) { toast.error(e.message); }
+    finally { setRunning(''); loadTasks(); loadOverview(); }
+  };
+  const runAlerts = async () => {
+    setRunning('alerts');
+    try {
+      const r = await API.runAlerts();
+      toast.success(`告警检查完成：用户端 ${r.userAlerts} 条，机场端 ${r.airportAlerts} 条`);
     } catch (e) { toast.error(e.message); }
     finally { setRunning(''); loadTasks(); loadOverview(); }
   };
@@ -134,6 +142,22 @@ export default function Automation({ toast }) {
             {running === 'traffic_stats' ? <span className="spin" /> : '▶ 立即统计'}
           </button>
           <LastRun task={overview?.automations?.find((x) => x.key === 'traffic_stats')?.last} />
+        </div>
+
+        {/* 到期/超限告警 */}
+        <div className="card">
+          <h3 style={{ marginTop: 0 }}>🔔 到期/超限告警</h3>
+          <p className="muted small">
+            用户到期/流量超限、机场用量≥99% 或到期≤1天时，发送邮件/Telegram 提醒。
+            通知内含免登录魔法链接：用户端可直接回填新订阅链接，机场端可一键拉取更新用量/到期。
+            渠道在<strong>「设置 · 告警通知」</strong>配置。
+          </p>
+          <TriggerInfo meta={metaOf('alerts')} />
+          <ScheduleEditor meta={metaOf('alerts')} onSave={(cfg) => saveSchedule('alerts', cfg)} />
+          <button className="btn primary" disabled={running === 'alerts'} onClick={runAlerts}>
+            {running === 'alerts' ? <span className="spin" /> : '▶ 立即检查并通知'}
+          </button>
+          <LastRun task={overview?.automations?.find((x) => x.key === 'alerts')?.last} />
         </div>
       </div>
 

@@ -13,6 +13,7 @@ export default function Settings({ toast, onAccountChange }) {
       <div className="page-head"><h1>设置</h1></div>
       <div style={{ display: 'grid', gap: 20, maxWidth: 720 }}>
         <AccountCard settings={settings} toast={toast} onChanged={onAccountChange} />
+        <NotifyCard toast={toast} />
         <TwoFACard settings={settings} toast={toast} reload={load} />
         <DevicesCard toast={toast} />
       </div>
@@ -45,6 +46,89 @@ function AccountCard({ settings, toast, onChanged }) {
         <div className="field"><label>新密码（留空不改）</label><input type="password" value={newPassword} onChange={(e) => setNew(e.target.value)} /></div>
       </div>
       <button className="btn primary" onClick={save} disabled={saving}>{saving ? <span className="spin" /> : '保存账户'}</button>
+    </div>
+  );
+}
+
+function NotifyCard({ toast }) {
+  const [cfg, setCfg] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+
+  useEffect(() => { API.getNotify().then(setCfg).catch((e) => toast.error(e.message)); }, [toast]);
+  if (!cfg) return <div className="card"><h3 style={{ marginTop: 0 }}>🔔 告警通知</h3><div className="muted small"><span className="spin" /></div></div>;
+
+  const setTop = (k, v) => setCfg((c) => ({ ...c, [k]: v }));
+  const setEmail = (k, v) => setCfg((c) => ({ ...c, email: { ...c.email, [k]: v } }));
+  const setTg = (k, v) => setCfg((c) => ({ ...c, telegram: { ...c.telegram, [k]: v } }));
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const r = await API.saveNotify(cfg);
+      setCfg(r.config);
+      toast.success('告警通知设置已保存');
+    } catch (e) { toast.error(e.message); } finally { setSaving(false); }
+  };
+  const test = async () => {
+    setTesting(true);
+    try { const r = await API.testNotify(); toast.success(`测试通知已发送（${r.results.map((x) => x.channel).join('/')}）`); }
+    catch (e) { toast.error(e.message); } finally { setTesting(false); }
+  };
+
+  return (
+    <div className="card">
+      <h3 style={{ marginTop: 0 }}>🔔 告警通知</h3>
+      <p className="muted small">
+        用户到期/超限、机场用量≥99% 或到期≤1天时提醒管理员。通知内含免登录魔法链接，可直接回填订阅链接或拉取机场。
+        触发在<strong>「自动化 · 到期/超限告警」</strong>运行或定时。
+      </p>
+
+      <div className="field">
+        <label>面板对外地址（魔法链接用，留空则用请求 Host / PUBLIC_BASE_URL）</label>
+        <input value={cfg.panelBaseUrl || ''} onChange={(e) => setTop('panelBaseUrl', e.target.value)} placeholder="https://panel.example.com" />
+      </div>
+      <div className="field-row">
+        <label className="checkbox-inline"><input type="checkbox" checked={!!cfg.userAlerts} onChange={(e) => setTop('userAlerts', e.target.checked)} /><span>用户端告警</span></label>
+        <label className="checkbox-inline"><input type="checkbox" checked={!!cfg.airportAlerts} onChange={(e) => setTop('airportAlerts', e.target.checked)} /><span>机场端告警</span></label>
+        <div className="field"><label>同类告警冷却(小时)</label><input type="number" min="0" value={cfg.cooldownHours ?? 24} onChange={(e) => setTop('cooldownHours', Number(e.target.value))} /></div>
+      </div>
+
+      <h4 style={{ margin: '14px 0 6px' }}>
+        <label className="checkbox-inline"><input type="checkbox" checked={!!cfg.email.enabled} onChange={(e) => setEmail('enabled', e.target.checked)} /><span>邮件 (SMTP)</span></label>
+      </h4>
+      {cfg.email.enabled && (
+        <>
+          <div className="field-row">
+            <div className="field"><label>SMTP 主机</label><input value={cfg.email.host || ''} onChange={(e) => setEmail('host', e.target.value)} placeholder="smtp.gmail.com" /></div>
+            <div className="field"><label>端口</label><input type="number" value={cfg.email.port ?? 465} onChange={(e) => setEmail('port', Number(e.target.value))} /></div>
+            <label className="checkbox-inline"><input type="checkbox" checked={cfg.email.secure !== false} onChange={(e) => setEmail('secure', e.target.checked)} /><span>SSL/TLS</span></label>
+          </div>
+          <div className="field-row">
+            <div className="field"><label>账号</label><input value={cfg.email.user || ''} onChange={(e) => setEmail('user', e.target.value)} autoComplete="off" /></div>
+            <div className="field"><label>密码 / 授权码（留空不改）</label><input type="password" value={cfg.email.pass || ''} onChange={(e) => setEmail('pass', e.target.value)} autoComplete="new-password" /></div>
+          </div>
+          <div className="field-row">
+            <div className="field"><label>发件人 From（留空用账号）</label><input value={cfg.email.from || ''} onChange={(e) => setEmail('from', e.target.value)} /></div>
+            <div className="field"><label>收件人 To（管理员邮箱）</label><input value={cfg.email.to || ''} onChange={(e) => setEmail('to', e.target.value)} /></div>
+          </div>
+        </>
+      )}
+
+      <h4 style={{ margin: '14px 0 6px' }}>
+        <label className="checkbox-inline"><input type="checkbox" checked={!!cfg.telegram.enabled} onChange={(e) => setTg('enabled', e.target.checked)} /><span>Telegram</span></label>
+      </h4>
+      {cfg.telegram.enabled && (
+        <div className="field-row">
+          <div className="field"><label>Bot Token（留空不改）</label><input type="password" value={cfg.telegram.botToken || ''} onChange={(e) => setTg('botToken', e.target.value)} autoComplete="new-password" placeholder="123456:ABC..." /></div>
+          <div className="field"><label>Chat ID</label><input value={cfg.telegram.chatId || ''} onChange={(e) => setTg('chatId', e.target.value)} placeholder="123456789" /></div>
+        </div>
+      )}
+
+      <div className="btn-row" style={{ marginTop: 12 }}>
+        <button className="btn primary" onClick={save} disabled={saving}>{saving ? <span className="spin" /> : '保存告警设置'}</button>
+        <button className="btn" onClick={test} disabled={testing}>{testing ? <span className="spin" /> : '发送测试'}</button>
+      </div>
     </div>
   );
 }

@@ -142,11 +142,28 @@ ensureColumns('airports', {
   user_agent: 'TEXT', cookie: 'TEXT', auth_token: 'TEXT',
   // reset_mode: 'http' (default) | 'flaresolverr' | 'manual'
   reset_mode: "TEXT DEFAULT 'http'", flaresolverr_url: 'TEXT',
+  // monotonic cumulative used traffic (bytes) that survives airport-side resets,
+  // plus the last raw reading used to detect a reset (a drop in reported usage);
+  // alert dedup state for the 到期/超限告警 automation.
+  used_traffic_cum: 'INTEGER', used_traffic_last: 'INTEGER',
+  alert_key: 'TEXT', alert_at: 'INTEGER',
 });
 ensureColumns('users', {
   traffic_base: 'INTEGER', traffic_used: 'INTEGER',
   traffic_limit: 'INTEGER', traffic_updated_at: 'INTEGER',
+  alert_key: 'TEXT', alert_at: 'INTEGER',
 });
+
+// Seed the cumulative-traffic baseline on existing rows so the monotonic counter
+// starts aligned with the last absolute reading (keeps user traffic_base, which
+// was measured on the absolute scale, consistent across the upgrade).
+db.exec(`
+  UPDATE airports
+     SET used_traffic_cum  = COALESCE(used_traffic_cum, used_traffic),
+         used_traffic_last = COALESCE(used_traffic_last, used_traffic)
+   WHERE used_traffic IS NOT NULL
+     AND (used_traffic_cum IS NULL OR used_traffic_last IS NULL)
+`);
 
 // ---- settings helpers ----
 const getStmt = db.prepare('SELECT value FROM settings WHERE key = ?');

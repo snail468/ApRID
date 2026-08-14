@@ -3,6 +3,8 @@ import { parseSubscription, parseUri, parseUserInfo } from '../src/services/node
 import { processAirportNodes, filterNodes } from '../src/services/nodeProcess.js';
 import { toBase64, toClash, toSingbox, toSurge, toQuanX, toLoon, detectFormat } from '../src/services/subscription/converters.js';
 import { DEFAULT_TEMPLATES } from '../src/services/subscription/defaultTemplates.js';
+import { accumulateUsed } from '../src/services/util.js';
+import { signAction, verifyAction } from '../src/services/actionToken.js';
 import { load as yamlLoad } from 'js-yaml';
 
 let pass = 0, fail = 0;
@@ -133,6 +135,42 @@ const loonRendered = toLoon(nodes, DEFAULT_TEMPLATES.loon.content);
 ok(loonRendered.includes('[Remote Rule]') && !loonRendered.includes('<PROXIES>'), 'loon default keeps remote rules');
 const quanRendered = toQuanX(nodes, DEFAULT_TEMPLATES.quantumultx.content);
 ok(quanRendered.includes('[filter_remote]') && !quanRendered.includes('<PROXY_NAMES>'), 'quanx default keeps filter_remote');
+
+// --- monotonic cumulative traffic survives airport resets ---
+{
+  // raw readings: 100 -> 150 -> 30 (airport reset) -> 50
+  let cum = null, last = null;
+  for (const raw of [100, 150, 30, 50]) ({ cum, last } = accumulateUsed(cum, last, raw));
+  // 100 (baseline) + 50 (growth) + 30 (fresh after reset) + 20 (growth) = 200
+  ok(cum === 200 && last === 50, `accumulateUsed reset-safe cum=${cum} last=${last}`);
+  // normal monotonic growth (no reset)
+  let c2 = null, l2 = null;
+  for (const raw of [10, 40, 90]) ({ cum: c2, last: l2 } = accumulateUsed(c2, l2, raw));
+  ok(c2 === 90, `accumulateUsed monotonic growth cum=${c2}`);
+  // non-numeric reading is ignored, counter unchanged
+  const kept = accumulateUsed(90, 90, null);
+  ok(kept.cum === 90 && kept.last === 90, 'accumulateUsed ignores null reading');
+}
+
+// --- signed action tokens (magic links) ---
+{
+  const token = signAction({ t: 'refill', ap: 5 });
+  const p = verifyAction(token);
+  ok(p.t === 'refill' && p.ap === 5, `verifyAction round-trip -> ${p.t}/${p.ap}`);
+  // tampering breaks the signature
+  const tampered = token.slice(0, -2) + (token.slice(-1) === 'A' ? 'B' : 'A');
+  let rejected = false;
+  try { verifyAction(tampered); } catch { rejected = true; }
+  ok(rejected, 'verifyAction rejects tampered token');
+  // expired token rejected
+  let expiredRejected = false;
+  try { verifyAction(signAction({ t: 'pull', ap: 1, ttlMs: -1000 })); } catch { expiredRejected = true; }
+  ok(expiredRejected, 'verifyAction rejects expired token');
+  // unknown action can't even be signed
+  let signRejected = false;
+  try { signAction({ t: 'delete', ap: 1 }); } catch { signRejected = true; }
+  ok(signRejected, 'signAction rejects unknown action');
+}
 
 // --- UA detection ---
 ok(detectFormat('ClashMetaForAndroid/2.10') === 'clash', 'detect clash UA');

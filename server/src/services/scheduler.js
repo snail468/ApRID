@@ -1,5 +1,5 @@
 import { getSetting, setSetting } from '../db.js';
-import { runAllAirportResets, runTrafficStats } from './automation.js';
+import { runAllAirportResets, runTrafficStats, runAlertCheck } from './automation.js';
 
 // Lightweight in-process scheduler for the automations. Config lives in the
 // settings table (survives restarts); a single 60s tick checks whether any
@@ -15,11 +15,13 @@ const SCHEDULES_KEY = 'automation_schedules';
 export const DEFAULT_SCHEDULES = {
   airport_reset: { enabled: false, type: 'daily', hour: 4, minute: 0, intervalHours: 24 },
   traffic_stats: { enabled: false, type: 'daily', hour: 3, minute: 0, intervalHours: 6 },
+  alerts: { enabled: false, type: 'interval', hour: 9, minute: 0, intervalHours: 1 },
 };
 
 const RUNNERS = {
   airport_reset: runAllAirportResets,
   traffic_stats: () => runTrafficStats({ refetch: true }),
+  alerts: runAlertCheck,
 };
 
 function clampInt(v, min, max, dflt) {

@@ -4,9 +4,26 @@ import qrcode from 'qrcode';
 import { authenticator } from 'otplib';
 import { db, getSetting, setSetting } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
+import { getNotifyConfigMasked, saveNotifyConfig, unmaskPatch, sendTestNotification } from '../services/notify.js';
 
 const router = express.Router();
 router.use(requireAuth);
+
+// ---- 告警通知配置 ----
+router.get('/notify', (req, res) => res.json(getNotifyConfigMasked()));
+router.put('/notify', (req, res) => {
+  const patch = unmaskPatch(req.body || {});
+  saveNotifyConfig(patch);
+  res.json({ ok: true, config: getNotifyConfigMasked() });
+});
+router.post('/notify/test', async (req, res) => {
+  try {
+    const results = await sendTestNotification();
+    res.json({ ok: true, results });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
 
 // change account name / password
 router.post('/account', (req, res) => {

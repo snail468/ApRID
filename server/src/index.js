@@ -18,6 +18,7 @@ import statsRoutes from './routes/stats.js';
 import subRoutes from './routes/sub.js';
 import groupRoutes from './routes/groups.js';
 import automationRoutes from './routes/automation.js';
+import actionRoutes from './routes/action.js';
 
 seedAdmin();
 seedTemplates();
@@ -35,6 +36,9 @@ app.get('/api/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
 
 // public subscription endpoint (no auth)
 app.use('/sub', subRoutes);
+
+// public login-free action pages reached from alert emails / Telegram (signed token)
+app.use('/action', actionRoutes);
 
 // admin API
 app.use('/api/auth', authRoutes);
