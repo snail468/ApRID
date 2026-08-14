@@ -4,6 +4,7 @@ import { parseSubscription, parseUserInfo } from '../nodeParser.js';
 import { processAirportNodes } from '../nodeProcess.js';
 import { detectChallenge, ANTIBOT_HINT } from './antibot.js';
 import { accumulateUsed } from '../util.js';
+import { maybeSendAirportAlert } from '../alerts.js';
 
 export const DEFAULT_UA = 'ClashMetaForAndroid/2.10.1.Meta';
 
@@ -73,5 +74,34 @@ export async function fetchAirport(airportId) {
   });
   tx();
 
+  // event-driven: usage/expiry just changed → evaluate the airport-side alert
+  // (deduped in alerts.js; non-blocking so the pull isn't delayed by notify I/O).
+  Promise.resolve().then(() => maybeSendAirportAlert(airportId)).catch(() => {});
+
   return { count: nodes.length, traffic: info };
+}
+
+// When a downstream user pulls their subscription we opportunistically refresh the
+// airport account(s) behind them, so usage (B−A) and expiry stay current without
+// waiting for a scheduled run. Throttled to at most one pull per airport per rolling
+// hour — no matter how many times users hit their sub — using the airport's own
+// last_fetch_at (persists across restarts) plus an in-memory in-flight guard.
+const PULL_WINDOW_MS = 3600000;
+const pullInflight = new Set();
+
+export function autoPullAirportsForUser(user) {
+  let filter = {};
+  try { filter = JSON.parse(user.node_filter || '{}'); } catch { /* noop */ }
+  const ids = Array.isArray(filter.airports) && filter.airports.length
+    ? filter.airports
+    : db.prepare('SELECT id FROM airports').all().map((r) => r.id);
+  const now = Date.now();
+  for (const id of ids) {
+    if (pullInflight.has(id)) continue;
+    const ap = db.prepare('SELECT id, sub_url, last_fetch_at FROM airports WHERE id = ?').get(id);
+    if (!ap || !ap.sub_url) continue;
+    if (now - (Number(ap.last_fetch_at) || 0) < PULL_WINDOW_MS) continue; // rolling 1h window
+    pullInflight.add(id);
+    fetchAirport(id).catch(() => {}).finally(() => pullInflight.delete(id));
+  }
 }

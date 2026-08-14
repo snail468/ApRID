@@ -2,8 +2,7 @@ import { db } from '../db.js';
 import { resetAirportSubscription } from './airport/adapters.js';
 import { fetchAirport } from './airport/fetch.js';
 import { fmtBytes } from './util.js';
-import { userStatus } from './subscription/build.js';
-import { notify, buildUserAlert, buildAirportAlert, getNotifyConfig } from './notify.js';
+import { maybeSendUserAlert, maybeSendAirportAlert } from './alerts.js';
 
 function createTask(type, refId) {
   const now = Date.now();
@@ -148,6 +147,11 @@ export async function runTrafficStats({ refetch = true } = {}) {
       if (limit > 0 && used >= limit) {
         cutoff++;
         appendLog(taskId, `用户「${u.name}」流量已用完（${fmtBytes(used)}/${fmtBytes(limit)}），订阅已自动切断`);
+        // event-driven: alert the moment exhaustion is measured (deduped)
+        try {
+          const r = await maybeSendUserAlert(u.id);
+          if (r.sent) appendLog(taskId, `→ 已发送用户端告警（${r.channels.join('/') || '无渠道成功'}）`);
+        } catch { /* notify never throws, but be safe */ }
       }
     }
 
@@ -161,98 +165,42 @@ export async function runTrafficStats({ refetch = true } = {}) {
   }
 }
 
-// "到期/超限告警" automation.
-// Scans users and airports; when a condition holds it sends a user-side or
-// airport-side alert (email / Telegram) carrying login-free magic links. Alerts
-// are de-duplicated per subject via an alert_key stored on the row: a new key
-// sends immediately; the same key re-sends only after the cooldown window; once
-// the condition clears the key is wiped so the next occurrence alerts again.
-const DAY_MS = 86400000;
-
-export async function runAlertCheck() {
-  const taskId = createTask('alerts', null);
+// "到期/超限告警" —— 周期全量扫描（时间驱动条件如到期/即将到期无事件可挂，只能定期看钟）。
+// 事件驱动条件（流量超限、机场用量阈值）已在 runTrafficStats / fetchAirport 就地触发，
+// 这里的扫描是它们的兜底 + 到期类的唯一触发。发送/去重逻辑统一走 services/alerts.js。
+// recordEmpty=false（后台每小时扫描）时，若本次没发出任何告警就不落任务日志，避免刷屏；
+// 手动运行走默认 true，总会留一条“已检查、0 条”的记录。
+export async function runAlertCheck({ recordEmpty = true } = {}) {
+  const userIds = db.prepare('SELECT id FROM users WHERE enabled = 1').all().map((r) => r.id);
+  const airportIds = db.prepare('SELECT id FROM airports').all().map((r) => r.id);
+  const lines = [];
+  let userAlerts = 0, airportAlerts = 0, failed = null;
   try {
-    const cfg = getNotifyConfig();
-    const channelsOn = cfg.email.enabled || cfg.telegram.enabled;
-    if (!channelsOn) appendLog(taskId, '⚠ 未启用任何通知渠道（邮件/Telegram），仅评估条件不发送');
-    const now = Date.now();
-    const cooldownMs = Math.max(0, Number(cfg.cooldownHours) || 0) * 3600000;
-
-    // dedup helper: decide whether to (re)send given stored key/time
-    const shouldSend = (row, key) =>
-      row.alert_key !== key || !row.alert_at || (cooldownMs > 0 && now - row.alert_at >= cooldownMs);
-
-    let userAlerts = 0, airportAlerts = 0;
-
-    // ---- user-side: expired / traffic exhausted ----
-    if (cfg.userAlerts) {
-      const allAirports = db.prepare('SELECT * FROM airports').all();
-      const byId = Object.fromEntries(allAirports.map((a) => [a.id, a]));
-      const users = db.prepare('SELECT * FROM users WHERE enabled = 1').all();
-      for (const u of users) {
-        const status = userStatus(u);
-        const reason = status === 'expired' ? 'expired' : status === 'exhausted' ? 'exhausted' : null;
-        if (!reason) {
-          if (u.alert_key) db.prepare('UPDATE users SET alert_key = NULL, alert_at = NULL WHERE id = ?').run(u.id);
-          continue;
-        }
-        if (!shouldSend(u, reason)) continue;
-        // don't record a send / dedup mark when there's no channel to send on —
-        // otherwise configuring channels later would find the alert already "sent".
-        if (!channelsOn) continue;
-        let filter = {};
-        try { filter = JSON.parse(u.node_filter || '{}'); } catch { /* noop */ }
-        const airportIds = Array.isArray(filter.airports) && filter.airports.length
-          ? filter.airports : allAirports.map((a) => a.id);
-        const airports = airportIds.map((id) => byId[id]).filter(Boolean);
-        const msg = buildUserAlert({ ...u, __reason: reason }, airports);
-        const results = await notify(msg);
-        const okChannels = results.filter((r) => r.ok).map((r) => r.channel).join('/');
-        appendLog(taskId, `用户「${u.name}」${reason === 'expired' ? '已到期' : '流量超限'} → 发送用户端告警` +
-          (okChannels ? `（${okChannels}）` : '（无渠道成功）'));
-        db.prepare('UPDATE users SET alert_key = ?, alert_at = ? WHERE id = ?').run(reason, now, u.id);
-        userAlerts++;
-      }
+    for (const id of userIds) {
+      const r = await maybeSendUserAlert(id);
+      if (r.sent) { userAlerts++; lines.push(`用户端告警 #${id}（${r.channels.join('/') || '无渠道成功'}）`); }
     }
-
-    // ---- airport-side: usage ≥ 99% / expiry ≤ 1 day ----
-    if (cfg.airportAlerts) {
-      const airports = db.prepare('SELECT * FROM airports').all();
-      for (const ap of airports) {
-        const reasons = [];
-        const keyParts = [];
-        const total = Number(ap.total_traffic || 0);
-        const used = Number(ap.used_traffic || 0);
-        if (total > 0 && used >= total * 0.99) { reasons.push('用量已达99%'); keyParts.push('traffic'); }
-        if (ap.expire_at && ap.expire_at - now <= DAY_MS) {
-          reasons.push(ap.expire_at < now ? '已到期' : '即将到期(≤1天)');
-          keyParts.push('expire');
-        }
-        const key = keyParts.join('|');
-        if (!key) {
-          if (ap.alert_key) db.prepare('UPDATE airports SET alert_key = NULL, alert_at = NULL WHERE id = ?').run(ap.id);
-          continue;
-        }
-        if (!shouldSend(ap, key)) continue;
-        if (!channelsOn) continue;
-        const msg = buildAirportAlert(ap, reasons);
-        const results = await notify(msg);
-        const okChannels = results.filter((r) => r.ok).map((r) => r.channel).join('/');
-        appendLog(taskId, `机场「${ap.name}」${reasons.join('、')} → 发送机场端告警` +
-          (okChannels ? `（${okChannels}）` : '（无渠道成功）'));
-        db.prepare('UPDATE airports SET alert_key = ?, alert_at = ? WHERE id = ?').run(key, now, ap.id);
-        airportAlerts++;
-      }
+    for (const id of airportIds) {
+      const r = await maybeSendAirportAlert(id);
+      if (r.sent) { airportAlerts++; lines.push(`机场端告警 #${id} ${r.reasons.join('、')}（${r.channels.join('/') || '无渠道成功'}）`); }
     }
+  } catch (err) { failed = err; }
 
-    appendLog(taskId, `完成：用户端告警 ${userAlerts} 条，机场端告警 ${airportAlerts} 条`);
-    finishTask(taskId, 'success');
-    return { taskId, userAlerts, airportAlerts };
-  } catch (err) {
-    appendLog(taskId, `失败：${err.message}`);
-    finishTask(taskId, 'failed');
-    throw Object.assign(err, { taskId });
+  // silent background sweep with nothing to say → don't create a task row
+  if (!recordEmpty && !failed && userAlerts === 0 && airportAlerts === 0) {
+    return { taskId: null, userAlerts, airportAlerts };
   }
+
+  const taskId = createTask('alerts', null);
+  for (const line of lines) appendLog(taskId, line);
+  if (failed) {
+    appendLog(taskId, `失败：${failed.message}`);
+    finishTask(taskId, 'failed');
+    throw Object.assign(failed, { taskId });
+  }
+  appendLog(taskId, `完成：用户端告警 ${userAlerts} 条，机场端告警 ${airportAlerts} 条`);
+  finishTask(taskId, 'success');
+  return { taskId, userAlerts, airportAlerts };
 }
 
 // Triggered when a user is reset or auto-expires: reset every airport the user pulls from.

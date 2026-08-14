@@ -80,8 +80,8 @@ function NotifyCard({ toast }) {
     <div className="card">
       <h3 style={{ marginTop: 0 }}>🔔 告警通知</h3>
       <p className="muted small">
-        用户到期/超限、机场用量≥99% 或到期≤1天时提醒管理员。通知内含免登录魔法链接，可直接回填订阅链接或拉取机场。
-        触发在<strong>「自动化 · 到期/超限告警」</strong>运行或定时。
+        用户到期/超限、机场用量≥97% 或到期≤1天时提醒管理员。通知内含免登录魔法链接，可直接回填订阅链接或拉取机场。
+        超限/机场用量为事件即时触发，到期类每小时后台自动检查。
       </p>
 
       <div className="field">

@@ -2,6 +2,7 @@ import express from 'express';
 import { db } from '../db.js';
 import { buildSubscription, buildResetNotice } from '../services/subscription/build.js';
 import { detectFormat, FORMATS } from '../services/subscription/converters.js';
+import { autoPullAirportsForUser } from '../services/airport/fetch.js';
 
 const router = express.Router();
 
@@ -20,6 +21,11 @@ router.get('/:token', (req, res) => {
     res.setHeader('Content-Type', notice.contentType);
     return res.send(notice.body);
   }
+
+  // A real client pull is our best signal the user is active — opportunistically
+  // refresh the airports behind them (throttled to 1×/hour each) so traffic/expiry
+  // stay fresh. Fire-and-forget: never delay the subscription response.
+  autoPullAirportsForUser(user);
 
   const { body, contentType, status } = buildSubscription(user, format);
 

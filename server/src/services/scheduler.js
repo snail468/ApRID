@@ -15,14 +15,18 @@ const SCHEDULES_KEY = 'automation_schedules';
 export const DEFAULT_SCHEDULES = {
   airport_reset: { enabled: false, type: 'daily', hour: 4, minute: 0, intervalHours: 24 },
   traffic_stats: { enabled: false, type: 'daily', hour: 3, minute: 0, intervalHours: 6 },
-  alerts: { enabled: false, type: 'interval', hour: 9, minute: 0, intervalHours: 1 },
 };
 
 const RUNNERS = {
   airport_reset: runAllAirportResets,
   traffic_stats: () => runTrafficStats({ refetch: true }),
-  alerts: runAlertCheck,
 };
+
+// 到期/超限告警不做成用户可配的定时任务：事件驱动条件（流量超限、机场用量）已在
+// 数据变化处就地触发；剩下的时间驱动条件（到期/即将到期）没有事件，只能定期看钟，
+// 因此这里让它每小时后台自动跑一次（无需用户开启）。去重由 alert_key 保证不刷屏。
+const ALERT_SWEEP_MS = 3600000;
+let alertSweeping = false;
 
 function clampInt(v, min, max, dflt) {
   const n = Math.round(Number(v));
@@ -89,8 +93,20 @@ function isDue(s, now) {
 const running = new Set();
 
 async function tick() {
-  const schedules = getSchedules();
   const now = Date.now();
+
+  // background hourly alert sweep (time-based 到期 conditions have no event hook)
+  const lastSweep = Number(getSetting('alerts_last_sweep', 0)) || 0;
+  if (!alertSweeping && now - lastSweep >= ALERT_SWEEP_MS) {
+    alertSweeping = true;
+    setSetting('alerts_last_sweep', String(now));
+    Promise.resolve()
+      .then(() => runAlertCheck({ recordEmpty: false }))
+      .catch((err) => console.error('[scheduler] 告警扫描失败:', err.message))
+      .finally(() => { alertSweeping = false; });
+  }
+
+  const schedules = getSchedules();
   for (const [key, s] of Object.entries(schedules)) {
     if (running.has(key) || !isDue(s, now)) continue;
     const runner = RUNNERS[key];

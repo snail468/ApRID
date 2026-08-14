@@ -148,12 +148,14 @@ export default function Automation({ toast }) {
         <div className="card">
           <h3 style={{ marginTop: 0 }}>🔔 到期/超限告警</h3>
           <p className="muted small">
-            用户到期/流量超限、机场用量≥99% 或到期≤1天时，发送邮件/Telegram 提醒。
+            用户到期/流量超限、机场用量≥97% 或到期≤1天时，发送邮件/Telegram 提醒。
             通知内含免登录魔法链接：用户端可直接回填新订阅链接，机场端可一键拉取更新用量/到期。
             渠道在<strong>「设置 · 告警通知」</strong>配置。
           </p>
           <TriggerInfo meta={metaOf('alerts')} />
-          <ScheduleEditor meta={metaOf('alerts')} onSave={(cfg) => saveSchedule('alerts', cfg)} />
+          <p className="muted small" style={{ marginTop: 4 }}>
+            💡 超限/机场用量为<strong>事件即时触发</strong>；到期类由后台<strong>每小时自动检查</strong>，无需配置。下方按钮可随时手动全量检查。
+          </p>
           <button className="btn primary" disabled={running === 'alerts'} onClick={runAlerts}>
             {running === 'alerts' ? <span className="spin" /> : '▶ 立即检查并通知'}
           </button>
