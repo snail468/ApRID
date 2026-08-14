@@ -3,6 +3,7 @@ import { resetAirportSubscription } from './airport/adapters.js';
 import { fetchAirport } from './airport/fetch.js';
 import { fmtBytes } from './util.js';
 import { maybeSendUserAlert, maybeSendAirportAlert } from './alerts.js';
+import { pingNodes } from './latency.js';
 
 function createTask(type, refId) {
   const now = Date.now();
@@ -201,6 +202,37 @@ export async function runAlertCheck({ recordEmpty = true } = {}) {
   appendLog(taskId, `完成：用户端告警 ${userAlerts} 条，机场端告警 ${airportAlerts} 条`);
   finishTask(taskId, 'success');
   return { taskId, userAlerts, airportAlerts };
+}
+
+// "延迟检测" automation. Measures real TCP-handshake RTT for the selected airports'
+// nodes (empty = all nodes) and writes latency/latency_at back. Reuses pingNodes.
+export async function runLatencyCheck(airportIds = []) {
+  const taskId = createTask('latency', null);
+  try {
+    const ids = Array.isArray(airportIds) ? airportIds.map(Number).filter((n) => !Number.isNaN(n)) : [];
+    const rows = ids.length
+      ? db.prepare(`SELECT id, server, port FROM nodes WHERE airport_id IN (${ids.map(() => '?').join(',')})`).all(...ids)
+      : db.prepare('SELECT id, server, port FROM nodes').all();
+    appendLog(taskId, `开始延迟检测：${ids.length ? `机场 [${ids.join(', ')}]` : '全部机场'}，共 ${rows.length} 个节点`);
+    if (!rows.length) {
+      appendLog(taskId, '没有可检测的节点');
+      finishTask(taskId, 'success');
+      return { taskId, total: 0, ok: 0, timeout: 0 };
+    }
+    const results = await pingNodes(rows);
+    const now = Date.now();
+    const upd = db.prepare('UPDATE nodes SET latency = ?, latency_at = ? WHERE id = ?');
+    db.transaction((list) => list.forEach((r) => upd.run(r.latency, now, r.id)))(results);
+    const timeout = results.filter((r) => r.latency < 0).length;
+    const ok = results.length - timeout;
+    appendLog(taskId, `完成：连通 ${ok} 个，超时 ${timeout} 个`);
+    finishTask(taskId, 'success');
+    return { taskId, total: results.length, ok, timeout };
+  } catch (err) {
+    appendLog(taskId, `失败：${err.message}`);
+    finishTask(taskId, 'failed');
+    throw Object.assign(err, { taskId });
+  }
 }
 
 // Triggered when a user is reset or auto-expires: reset every airport the user pulls from.

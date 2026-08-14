@@ -80,10 +80,25 @@ export function fmtBytes(b) {
   return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
 }
 
+// Whole app renders times in UTC+8 (北京时间) regardless of the viewer's browser
+// timezone. China has no DST, so a fixed +8h offset on the epoch is exact — we
+// read the shifted date's UTC fields to get UTC+8 wall-clock parts.
+const TZ_OFFSET_MS = 8 * 3600000;
+function wall8(ms) {
+  return new Date(Number(ms) + TZ_OFFSET_MS); // read via getUTC* for UTC+8 parts
+}
+const pad2 = (n) => String(n).padStart(2, '0');
+
 export function fmtDate(ms) {
   if (!ms) return '-';
-  const d = new Date(Number(ms));
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const d = wall8(ms);
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+}
+
+export function fmtDateTime(ms) {
+  if (!ms) return '-';
+  const d = wall8(ms);
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
 }
 
 export function daysLeft(ms) {
@@ -91,12 +106,17 @@ export function daysLeft(ms) {
   return Math.ceil((Number(ms) - Date.now()) / 86400000);
 }
 
+// value for <input type="datetime-local">, showing UTC+8 wall clock
 export function toDatetimeLocal(ms) {
   if (!ms) return '';
-  const d = new Date(Number(ms));
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const d = wall8(ms);
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}T${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
 }
+// interpret the datetime-local string as UTC+8 wall clock -> epoch ms
 export function fromDatetimeLocal(v) {
-  return v ? new Date(v).getTime() : null;
+  if (!v) return null;
+  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!m) return new Date(v).getTime();
+  const [, y, mo, d, h, mi] = m.map(Number);
+  return Date.UTC(y, mo - 1, d, h, mi) - TZ_OFFSET_MS;
 }

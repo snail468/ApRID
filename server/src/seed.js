@@ -1,5 +1,15 @@
 import { db, getSetting, setSetting } from './db.js';
 import { DEFAULT_TEMPLATES } from './services/subscription/defaultTemplates.js';
+import { DEFAULT_GLOBAL_EXCLUDE } from './services/nodeProcess.js';
+
+// Seed the 全局节点正则排除 default on first run only (idempotent). Never overwrites
+// an admin-edited value; a blank value is allowed (means "disabled") once set.
+export function seedSettings() {
+  if (getSetting('global_node_exclude') == null) {
+    setSetting('global_node_exclude', DEFAULT_GLOBAL_EXCLUDE);
+    console.log('[init] seeded default 全局节点排除 template');
+  }
+}
 
 // Bump this whenever the built-in DEFAULT_TEMPLATES content changes so existing
 // installs re-sync their is_default templates to the new version.

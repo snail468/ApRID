@@ -1,7 +1,7 @@
 import express from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
-import { runAirportReset, runAllAirportResets, runTrafficStats, runAlertCheck } from '../services/automation.js';
+import { runAirportReset, runAllAirportResets, runTrafficStats, runAlertCheck, runLatencyCheck } from '../services/automation.js';
 import { testAirportConnection } from '../services/airport/adapters.js';
 import { getSchedules, setSchedules, describeSchedule } from '../services/scheduler.js';
 
@@ -36,6 +36,15 @@ router.get('/', (req, res) => {
         autoTriggers: [],
         schedule: schedules.traffic_stats,
         scheduleText: describeSchedule(schedules.traffic_stats),
+      },
+      {
+        key: 'latency',
+        name: '节点延迟检测',
+        last: last('latency'),
+        manual: true,
+        autoTriggers: [],
+        schedule: schedules.latency,
+        scheduleText: describeSchedule(schedules.latency),
       },
       {
         key: 'alerts',
@@ -105,6 +114,17 @@ router.post('/traffic-stats', async (req, res) => {
 router.post('/alerts', async (req, res) => {
   try {
     const r = await runAlertCheck();
+    res.json({ ok: true, ...r });
+  } catch (err) {
+    res.status(400).json({ error: err.message, taskId: err.taskId });
+  }
+});
+
+// Run "节点延迟检测" for the given airports (empty/omitted = all nodes).
+router.post('/latency', async (req, res) => {
+  try {
+    const airports = Array.isArray(req.body?.airports) ? req.body.airports : [];
+    const r = await runLatencyCheck(airports);
     res.json({ ok: true, ...r });
   } catch (err) {
     res.status(400).json({ error: err.message, taskId: err.taskId });

@@ -20,6 +20,8 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=6601
 ENV DB_PATH=/data/aprid.db
+# app-wide timezone: 全应用时间统一 UTC+8（北京时间）
+ENV TZ=Asia/Shanghai
 RUN mkdir -p /data
 COPY server/package.json ./
 COPY --from=server-deps /app/node_modules ./node_modules

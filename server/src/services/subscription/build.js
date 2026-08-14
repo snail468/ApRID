@@ -1,6 +1,6 @@
-import { db } from '../../db.js';
+import { db, getSetting } from '../../db.js';
 import { FORMATS } from './converters.js';
-import { filterNodes, renameNodes, dedupWithinGroup, applyGlobalPrefix } from '../nodeProcess.js';
+import { filterNodes, renameNodes, dedupWithinGroup, applyGlobalPrefix, combineExclude } from '../nodeProcess.js';
 
 // A synthetic single-node subscription used for expired / reset states.
 // Uses a harmless unreachable trojan node whose *name* carries the message.
@@ -53,8 +53,10 @@ export function collectUserNodes(user) {
     collected.push(...nodes);
   }
 
-  // user-level filtering / renaming
-  let out = filterNodes(collected, filter);
+  // user-level filtering / renaming — also apply the global node-exclude regex at
+  // delivery so changing it takes effect immediately (no re-pull needed).
+  const userFilter = { ...filter, exclude: combineExclude(getSetting('global_node_exclude', ''), filter.exclude) };
+  let out = filterNodes(collected, userFilter);
   out = renameNodes(out, filter);
   out = dedupWithinGroup(out);
   return out;

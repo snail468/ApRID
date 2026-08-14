@@ -1,35 +1,43 @@
-import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from 'react';
 import { API } from '../api.js';
-import { fmtDate } from '../ui.jsx';
+import { fmtDate, fmtDateTime } from '../ui.jsx';
 import { invalidate } from '../store.js';
 
 const TASK_LABEL = {
   airport_reset: '机场订阅重置', traffic_stats: '用户流量统计', alerts: '告警检查',
-  node_fetch: '节点拉取', latency: '延迟检测',
+  latency: '延迟检测', node_fetch: '节点拉取',
 };
 const STATUS_BADGE = { success: 'green', failed: 'red', running: 'blue', pending: 'gray' };
 
+const TABS = [
+  { key: 'airport_reset', label: '🔄 机场订阅重置' },
+  { key: 'traffic_stats', label: '📊 用户流量统计' },
+  { key: 'alerts', label: '🔔 到期/超限告警' },
+  { key: 'latency', label: '📡 节点延迟检测' },
+];
+
 export default function Automation({ toast }) {
+  const [tab, setTab] = useState('airport_reset');
   const [overview, setOverview] = useState(null);
   const [tasks, setTasks] = useState([]);
-  const [running, setRunning] = useState('');   // which automation is running
-  const [openLog, setOpenLog] = useState(null); // task id whose log is expanded
-  const [testing, setTesting] = useState(null);  // airport id being tested
-  const [testResult, setTestResult] = useState({}); // airportId -> {ok,msg}
+  const [running, setRunning] = useState('');
+  const [testing, setTesting] = useState(null);
+  const [testResult, setTestResult] = useState({});
+  const [latAirports, setLatAirports] = useState(null); // selected airport ids for latency scope
   const timer = useRef(null);
 
   const loadTasks = useCallback(() => API.tasks().then(setTasks).catch(() => {}), []);
-  const loadOverview = useCallback(() => API.automationOverview().then(setOverview).catch((e) => toast.error(e.message)), [toast]);
+  const loadOverview = useCallback(() => API.automationOverview().then((o) => {
+    setOverview(o);
+    setLatAirports((cur) => cur ?? (o.automations.find((x) => x.key === 'latency')?.schedule?.airports || []));
+  }).catch((e) => toast.error(e.message)), [toast]);
 
   useEffect(() => { loadOverview(); loadTasks(); }, [loadOverview, loadTasks]);
 
-  // poll while any task is running so progress/logs update live
   useEffect(() => {
     const anyRunning = tasks.some((t) => t.status === 'running') || running;
     clearInterval(timer.current);
-    if (anyRunning) {
-      timer.current = setInterval(() => { loadTasks(); loadOverview(); }, 1500);
-    }
+    if (anyRunning) timer.current = setInterval(() => { loadTasks(); loadOverview(); }, 1500);
     return () => clearInterval(timer.current);
   }, [tasks, running, loadTasks, loadOverview]);
 
@@ -57,6 +65,15 @@ export default function Automation({ toast }) {
     try {
       const r = await API.runAlerts();
       toast.success(`告警检查完成：用户端 ${r.userAlerts} 条，机场端 ${r.airportAlerts} 条`);
+    } catch (e) { toast.error(e.message); }
+    finally { setRunning(''); loadTasks(); loadOverview(); }
+  };
+  const runLatency = async () => {
+    setRunning('latency');
+    try {
+      const r = await API.runLatency(latAirports || []);
+      toast.success(`延迟检测完成：连通 ${r.ok}，超时 ${r.timeout}（共 ${r.total}）`);
+      invalidate('nodes:');
     } catch (e) { toast.error(e.message); }
     finally { setRunning(''); loadTasks(); loadOverview(); }
   };
@@ -89,17 +106,22 @@ export default function Automation({ toast }) {
     <>
       <div className="page-head"><h1>自动化</h1></div>
       <p className="muted small" style={{ marginTop: -8 }}>
-        所有自动化任务均需在此显式运行；每个任务的自动触发条件见下方卡片，运行过程与报错见任务日志。
+        每个自动化一个标签页；触发条件与定时（交互式 Cron，北京时间）见各页，运行过程与报错见对应任务日志。
       </p>
 
-      <div className="auto-grid">
-        {/* 机场订阅自动重置 */}
+      <div className="tabs">
+        {TABS.map((t) => (
+          <div key={t.key} className={`tab ${tab === t.key ? 'active' : ''}`} onClick={() => setTab(t.key)}>{t.label}</div>
+        ))}
+      </div>
+
+      {tab === 'airport_reset' && (
         <div className="card">
           <h3 style={{ marginTop: 0 }}>🔄 机场订阅自动重置</h3>
           <p className="muted small">后台登录机场 → 重置订阅 → 回填链接 → 拉取一次。</p>
           <TriggerInfo meta={metaOf('airport_reset')} />
-          <ScheduleEditor meta={metaOf('airport_reset')} onSave={(cfg) => saveSchedule('airport_reset', cfg)} />
-          <div className="btn-row" style={{ marginBottom: 12 }}>
+          <CronEditor schedule={metaOf('airport_reset')?.schedule} onSave={(cfg) => saveSchedule('airport_reset', cfg)} />
+          <div className="btn-row" style={{ margin: '12px 0' }}>
             <button className="btn primary" disabled={running === 'airport_reset'} onClick={() => runAirportReset()}>
               {running === 'airport_reset' ? <span className="spin" /> : '▶ 全部机场'}
             </button>
@@ -127,24 +149,29 @@ export default function Automation({ toast }) {
               </div>
             ))}
           </div>
+          <TaskLog tasks={tasks} type="airport_reset" onClear={clearTasks} />
         </div>
+      )}
 
-        {/* 用户流量统计 */}
+      {tab === 'traffic_stats' && (
         <div className="card">
           <h3 style={{ marginTop: 0 }}>📊 用户流量统计</h3>
           <p className="muted small">
-            按机场账户用量估算每个用户已用流量（B−A），达到「流量上限」的用户订阅将自动切断。
+            按机场账户用量估算每个用户已用流量（B−A，机场重置不失真），达到「流量上限」的用户订阅将自动切断。
             首次运行仅建立基线（A）。
           </p>
           <TriggerInfo meta={metaOf('traffic_stats')} />
-          <ScheduleEditor meta={metaOf('traffic_stats')} onSave={(cfg) => saveSchedule('traffic_stats', cfg)} />
-          <button className="btn primary" disabled={running === 'traffic_stats'} onClick={runTraffic}>
-            {running === 'traffic_stats' ? <span className="spin" /> : '▶ 立即统计'}
-          </button>
-          <LastRun task={overview?.automations?.find((x) => x.key === 'traffic_stats')?.last} />
+          <CronEditor schedule={metaOf('traffic_stats')?.schedule} onSave={(cfg) => saveSchedule('traffic_stats', cfg)} />
+          <div style={{ margin: '12px 0' }}>
+            <button className="btn primary" disabled={running === 'traffic_stats'} onClick={runTraffic}>
+              {running === 'traffic_stats' ? <span className="spin" /> : '▶ 立即统计'}
+            </button>
+          </div>
+          <TaskLog tasks={tasks} type="traffic_stats" onClear={clearTasks} />
         </div>
+      )}
 
-        {/* 到期/超限告警 */}
+      {tab === 'alerts' && (
         <div className="card">
           <h3 style={{ marginTop: 0 }}>🔔 到期/超限告警</h3>
           <p className="muted small">
@@ -156,117 +183,219 @@ export default function Automation({ toast }) {
           <p className="muted small" style={{ marginTop: 4 }}>
             💡 超限/机场用量为<strong>事件即时触发</strong>；到期类由后台<strong>每小时自动检查</strong>，无需配置。下方按钮可随时手动全量检查。
           </p>
-          <button className="btn primary" disabled={running === 'alerts'} onClick={runAlerts}>
-            {running === 'alerts' ? <span className="spin" /> : '▶ 立即检查并通知'}
-          </button>
-          <LastRun task={overview?.automations?.find((x) => x.key === 'alerts')?.last} />
-        </div>
-      </div>
-
-      {/* task log history */}
-      <div className="card" style={{ marginTop: 20 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h3 style={{ margin: 0 }}>任务日志</h3>
-          <button className="btn sm" onClick={clearTasks}>清空已完成</button>
-        </div>
-        {tasks.length === 0 ? <div className="muted small" style={{ marginTop: 12 }}>暂无任务记录</div> : (
-          <div className="table-wrap" style={{ marginTop: 12 }}>
-            <table>
-              <thead><tr><th>#</th><th>类型</th><th>目标</th><th>状态</th><th>开始</th><th>结束</th><th>日志</th></tr></thead>
-              <tbody>
-                {tasks.map((t) => (
-                  <Fragment key={t.id}>
-                    <tr>
-                      <td>{t.id}</td>
-                      <td>{TASK_LABEL[t.type] || t.type}</td>
-                      <td className="small">{t.ref_name || <span className="muted">-</span>}</td>
-                      <td><span className={`badge ${STATUS_BADGE[t.status] || 'gray'}`}>{t.status === 'running' ? <><span className="spin" /> 运行中</> : t.status}</span></td>
-                      <td className="muted small">{fmtDateTime(t.created_at)}</td>
-                      <td className="muted small">{t.finished_at ? fmtDateTime(t.finished_at) : '-'}</td>
-                      <td><button className="btn sm" onClick={() => setOpenLog(openLog === t.id ? null : t.id)}>{openLog === t.id ? '收起' : '查看'}</button></td>
-                    </tr>
-                    {openLog === t.id && (
-                      <tr>
-                        <td colSpan={7}><pre className="task-log">{t.log || '（无日志）'}</pre></td>
-                      </tr>
-                    )}
-                  </Fragment>
-                ))}
-              </tbody>
-            </table>
+          <div style={{ margin: '12px 0' }}>
+            <button className="btn primary" disabled={running === 'alerts'} onClick={runAlerts}>
+              {running === 'alerts' ? <span className="spin" /> : '▶ 立即检查并通知'}
+            </button>
           </div>
-        )}
-      </div>
+          <TaskLog tasks={tasks} type="alerts" onClear={clearTasks} />
+        </div>
+      )}
+
+      {tab === 'latency' && (
+        <div className="card">
+          <h3 style={{ marginTop: 0 }}>📡 节点延迟检测</h3>
+          <p className="muted small">对所选机场的节点做真实 TCP 握手测速（best-of-2），回写节点延迟。不选机场=检测全部节点。</p>
+          <div className="field">
+            <label>检测范围（按机场，不勾=全部）</label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 4px' }}>
+              {airports.length === 0 ? <span className="muted small">暂无机场</span> : airports.map((a) => {
+                const checked = (latAirports || []).includes(a.id);
+                return (
+                  <label key={a.id} className="checkbox-inline" style={{ marginRight: 14 }}>
+                    <input type="checkbox" checked={checked} onChange={(e) => {
+                      setLatAirports((cur) => {
+                        const set = new Set(cur || []);
+                        if (e.target.checked) set.add(a.id); else set.delete(a.id);
+                        return [...set];
+                      });
+                    }} />
+                    <span>{a.name}{a.account ? ` / ${a.account}` : ''}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+          <TriggerInfo meta={metaOf('latency')} />
+          <CronEditor schedule={metaOf('latency')?.schedule}
+            onSave={(cfg) => saveSchedule('latency', { ...cfg, airports: latAirports || [] })} />
+          <div style={{ margin: '12px 0' }}>
+            <button className="btn primary" disabled={running === 'latency'} onClick={runLatency}>
+              {running === 'latency' ? <span className="spin" /> : '▶ 立即检测'}
+            </button>
+            <span className="muted small" style={{ marginLeft: 8 }}>
+              {(latAirports || []).length ? `范围：${latAirports.length} 个机场` : '范围：全部节点'}
+            </span>
+          </div>
+          <TaskLog tasks={tasks} type="latency" onClear={clearTasks} />
+        </div>
+      )}
     </>
   );
 }
 
 function TriggerInfo({ meta }) {
   if (!meta) return null;
+  const hasTriggers = meta.autoTriggers && meta.autoTriggers.length > 0;
   return (
     <div className="trigger-info">
-      <div className="small"><strong>自动触发条件</strong></div>
-      {meta.autoTriggers && meta.autoTriggers.length > 0 ? (
-        <ul className="trigger-list">
-          {meta.autoTriggers.map((line, i) => <li key={i} className="muted small">{line}</li>)}
-        </ul>
-      ) : (
-        <div className="muted small">无自动触发条件</div>
+      {hasTriggers && (
+        <>
+          <div className="small"><strong>自动触发条件</strong></div>
+          <ul className="trigger-list">
+            {meta.autoTriggers.map((line, i) => <li key={i} className="muted small">{line}</li>)}
+          </ul>
+        </>
       )}
       {meta.scheduleText && <div className="muted small" style={{ marginTop: 2 }}>⏱ 定时：{meta.scheduleText}</div>}
     </div>
   );
 }
 
-function ScheduleEditor({ meta, onSave }) {
-  const s = meta?.schedule;
-  const [cfg, setCfg] = useState(null);
+/* ---------------- 交互式 Cron 编辑器 ---------------- */
+const WEEK = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+// best-effort parse of a cron string back into the builder's structured state
+function parseCronToState(cron) {
+  const parts = String(cron || '').trim().split(/\s+/);
+  const base = { mode: 'daily', minute: 0, hour: 3, everyN: 2, weekday: 1, monthday: 1, custom: cron || '0 3 * * *' };
+  if (parts.length !== 5) return { ...base, mode: 'custom' };
+  const [mi, h, dom, mon, dow] = parts;
+  const num = (s) => /^\d+$/.test(s);
+  if (h === '*' && dom === '*' && mon === '*' && dow === '*' && num(mi)) return { ...base, mode: 'hourly', minute: +mi };
+  if (dom === '*' && mon === '*' && dow === '*' && mi === '0' && /^\*\/\d+$/.test(h)) return { ...base, mode: 'everyN', everyN: +h.slice(2) };
+  if (dom === '*' && mon === '*' && dow === '*' && num(mi) && num(h)) return { ...base, mode: 'daily', minute: +mi, hour: +h };
+  if (dom === '*' && mon === '*' && num(mi) && num(h) && num(dow)) return { ...base, mode: 'weekly', minute: +mi, hour: +h, weekday: +dow };
+  if (mon === '*' && dow === '*' && num(mi) && num(h) && num(dom)) return { ...base, mode: 'monthly', minute: +mi, hour: +h, monthday: +dom };
+  return { ...base, mode: 'custom' };
+}
+
+function buildCron(s) {
+  const mi = clamp(s.minute, 0, 59), h = clamp(s.hour, 0, 23);
+  switch (s.mode) {
+    case 'hourly': return `${mi} * * * *`;
+    case 'everyN': return `0 */${clamp(s.everyN, 1, 23)} * * *`;
+    case 'daily': return `${mi} ${h} * * *`;
+    case 'weekly': return `${mi} ${h} * * ${clamp(s.weekday, 0, 6)}`;
+    case 'monthly': return `${mi} ${h} ${clamp(s.monthday, 1, 31)} * *`;
+    default: return (s.custom || '').trim();
+  }
+}
+function clamp(v, lo, hi) { const n = Math.round(Number(v)); return Number.isNaN(n) ? lo : Math.min(hi, Math.max(lo, n)); }
+const pad = (n) => String(n).padStart(2, '0');
+
+function describe(s) {
+  const mi = clamp(s.minute, 0, 59), h = clamp(s.hour, 0, 23);
+  switch (s.mode) {
+    case 'hourly': return `每小时第 ${mi} 分`;
+    case 'everyN': return `每 ${clamp(s.everyN, 1, 23)} 小时`;
+    case 'daily': return `每天 ${pad(h)}:${pad(mi)}`;
+    case 'weekly': return `每${WEEK[clamp(s.weekday, 0, 6)]} ${pad(h)}:${pad(mi)}`;
+    case 'monthly': return `每月 ${clamp(s.monthday, 1, 31)} 日 ${pad(h)}:${pad(mi)}`;
+    default: return `自定义：${(s.custom || '').trim() || '（空）'}`;
+  }
+}
+
+function CronEditor({ schedule, onSave }) {
+  const [enabled, setEnabled] = useState(false);
+  const [st, setSt] = useState(null);
+
   useEffect(() => {
-    if (s) setCfg({ enabled: !!s.enabled, type: s.type || 'daily', hour: s.hour ?? 4, minute: s.minute ?? 0, intervalHours: s.intervalHours ?? 24 });
-  }, [s?.enabled, s?.type, s?.hour, s?.minute, s?.intervalHours]);
-  if (!cfg) return null;
-  const set = (k, v) => setCfg((c) => ({ ...c, [k]: v }));
+    if (!schedule) return;
+    setEnabled(!!schedule.enabled);
+    setSt(parseCronToState(schedule.cron));
+  }, [schedule?.enabled, schedule?.cron]);
+
+  if (!st) return null;
+  const set = (k, v) => setSt((c) => ({ ...c, [k]: v }));
+  const cron = buildCron(st);
 
   return (
     <div className="schedule-editor">
       <label className="checkbox-inline">
-        <input type="checkbox" checked={cfg.enabled} onChange={(e) => set('enabled', e.target.checked)} />
-        <span>开启定时任务</span>
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+        <span>开启定时任务（北京时间）</span>
       </label>
-      {cfg.enabled && (
-        <div className="schedule-row">
-          <select value={cfg.type} onChange={(e) => set('type', e.target.value)}>
-            <option value="daily">每天定点</option>
-            <option value="interval">按小时间隔</option>
-          </select>
-          {cfg.type === 'daily' ? (
-            <span className="schedule-inline">
-              <input type="number" min="0" max="23" value={cfg.hour} onChange={(e) => set('hour', e.target.value)} />
-              <span>:</span>
-              <input type="number" min="0" max="59" value={cfg.minute} onChange={(e) => set('minute', e.target.value)} />
-            </span>
-          ) : (
-            <span className="schedule-inline">
-              每 <input type="number" min="1" max="168" value={cfg.intervalHours} onChange={(e) => set('intervalHours', e.target.value)} /> 小时
-            </span>
-          )}
+      {enabled && (
+        <>
+          <div className="schedule-row">
+            <select value={st.mode} onChange={(e) => set('mode', e.target.value)}>
+              <option value="hourly">每小时</option>
+              <option value="everyN">每 N 小时</option>
+              <option value="daily">每天</option>
+              <option value="weekly">每周</option>
+              <option value="monthly">每月</option>
+              <option value="custom">自定义 Cron</option>
+            </select>
+
+            {st.mode === 'hourly' && (
+              <span className="schedule-inline">第 <input type="number" min="0" max="59" value={st.minute} onChange={(e) => set('minute', e.target.value)} /> 分</span>
+            )}
+            {st.mode === 'everyN' && (
+              <span className="schedule-inline">每 <input type="number" min="1" max="23" value={st.everyN} onChange={(e) => set('everyN', e.target.value)} /> 小时</span>
+            )}
+            {(st.mode === 'daily' || st.mode === 'weekly' || st.mode === 'monthly') && (
+              <span className="schedule-inline">
+                {st.mode === 'weekly' && (
+                  <select value={st.weekday} onChange={(e) => set('weekday', e.target.value)}>
+                    {WEEK.map((w, i) => <option key={i} value={i}>{w}</option>)}
+                  </select>
+                )}
+                {st.mode === 'monthly' && (
+                  <><input type="number" min="1" max="31" value={st.monthday} onChange={(e) => set('monthday', e.target.value)} /> 日</>
+                )}
+                <input type="number" min="0" max="23" value={st.hour} onChange={(e) => set('hour', e.target.value)} />
+                <span>:</span>
+                <input type="number" min="0" max="59" value={st.minute} onChange={(e) => set('minute', e.target.value)} />
+              </span>
+            )}
+            {st.mode === 'custom' && (
+              <input style={{ width: 180 }} className="mono" value={st.custom} placeholder="分 时 日 月 周"
+                onChange={(e) => set('custom', e.target.value)} />
+            )}
+          </div>
+          <div className="muted small" style={{ marginTop: 4 }}>{describe(st)} · <code>{cron || '（空）'}</code></div>
+        </>
+      )}
+      <button className="btn sm" style={{ marginTop: 8 }} onClick={() => onSave({ enabled, cron })}>保存定时</button>
+    </div>
+  );
+}
+
+/* ---------------- 任务日志（按类型过滤，随 Tab） ---------------- */
+function TaskLog({ tasks, type, onClear }) {
+  const [openLog, setOpenLog] = useState(null);
+  const rows = useMemo(() => (tasks || []).filter((t) => t.type === type), [tasks, type]);
+  return (
+    <div style={{ marginTop: 18 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h3 style={{ margin: 0, fontSize: 15 }}>任务日志</h3>
+        <button className="btn sm" onClick={onClear}>清空已完成</button>
+      </div>
+      {rows.length === 0 ? <div className="muted small" style={{ marginTop: 10 }}>暂无任务记录</div> : (
+        <div className="table-wrap" style={{ marginTop: 10 }}>
+          <table>
+            <thead><tr><th>#</th><th>目标</th><th>状态</th><th>开始</th><th>结束</th><th>日志</th></tr></thead>
+            <tbody>
+              {rows.map((t) => (
+                <Fragment key={t.id}>
+                  <tr>
+                    <td>{t.id}</td>
+                    <td className="small">{t.ref_name || <span className="muted">-</span>}</td>
+                    <td><span className={`badge ${STATUS_BADGE[t.status] || 'gray'}`}>{t.status === 'running' ? <><span className="spin" /> 运行中</> : t.status}</span></td>
+                    <td className="muted small">{fmtDateTime(t.created_at)}</td>
+                    <td className="muted small">{t.finished_at ? fmtDateTime(t.finished_at) : '-'}</td>
+                    <td><button className="btn sm" onClick={() => setOpenLog(openLog === t.id ? null : t.id)}>{openLog === t.id ? '收起' : '查看'}</button></td>
+                  </tr>
+                  {openLog === t.id && (
+                    <tr><td colSpan={6}><pre className="task-log">{t.log || '（无日志）'}</pre></td></tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
-      <button className="btn sm" onClick={() => onSave(cfg)}>保存定时</button>
     </div>
   );
-}
-
-function LastRun({ task }) {
-  if (!task) return <div className="muted small" style={{ marginTop: 10 }}>尚未运行</div>;
-  return (
-    <div className="muted small" style={{ marginTop: 10 }}>
-      上次：<span className={`badge ${STATUS_BADGE[task.status] || 'gray'}`}>{task.status}</span> · {fmtDateTime(task.created_at)}
-    </div>
-  );
-}
-
-function fmtDateTime(ms) {
-  if (!ms) return '-';
-  return new Date(Number(ms)).toLocaleString('zh-CN');
 }

@@ -5,6 +5,12 @@ import { fileURLToPath } from 'node:url';
 // load .env from project root when running locally
 dotenv.config();
 
+// App-wide timezone: everything (task logs, alerts, scheduler wall-clock, cron
+// evaluation) runs in UTC+8 / Asia/Shanghai. config.js is imported before any Date
+// is used, so this takes effect globally. Forced (not host-overridable) so the
+// panel's times are consistent with the frontend, which always renders UTC+8.
+process.env.TZ = 'Asia/Shanghai';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const config = {

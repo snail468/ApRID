@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 import { seedAdmin } from './db.js';
-import { seedTemplates } from './seed.js';
+import { seedTemplates, seedSettings } from './seed.js';
 import { startScheduler } from './services/scheduler.js';
 
 import authRoutes from './routes/auth.js';
@@ -22,6 +22,7 @@ import actionRoutes from './routes/action.js';
 
 seedAdmin();
 seedTemplates();
+seedSettings();
 startScheduler();
 
 const app = express();

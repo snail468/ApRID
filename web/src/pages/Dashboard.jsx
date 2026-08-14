@@ -1,5 +1,5 @@
 import { API } from '../api.js';
-import { fmtDate } from '../ui.jsx';
+import { fmtDate, fmtDateTime } from '../ui.jsx';
 import { useCachedResource } from '../store.js';
 
 export default function Dashboard() {
@@ -55,8 +55,4 @@ function taskLabel(t) {
 }
 function statusColor(s) {
   return { success: 'green', failed: 'red', running: 'blue', pending: 'gray' }[s] || 'gray';
-}
-function fmtDateTime(ms) {
-  if (!ms) return '-';
-  return new Date(Number(ms)).toLocaleString('zh-CN');
 }

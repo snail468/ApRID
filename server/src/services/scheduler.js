@@ -1,25 +1,25 @@
 import { getSetting, setSetting } from '../db.js';
-import { runAllAirportResets, runTrafficStats, runAlertCheck } from './automation.js';
+import { runAllAirportResets, runTrafficStats, runAlertCheck, runLatencyCheck } from './automation.js';
+import { cronMatch, isValidCron, describeCron } from './cron.js';
 
 // Lightweight in-process scheduler for the automations. Config lives in the
 // settings table (survives restarts); a single 60s tick checks whether any
-// automation is due and runs it. Two trigger modes per automation:
-//   - daily:    run once a day at HH:MM (local time)
-//   - interval: run every N hours since the last run
-//
-// This is the "定时任务" the Automation page configures. All runs still land in
-// the tasks table with full logs, exactly like a manual run.
+// automation is due and runs it. Each automation is triggered by an interactive
+// Cron expression (evaluated in UTC+8, see config.js). All runs still land in the
+// tasks table with full logs, exactly like a manual run.
 
 const SCHEDULES_KEY = 'automation_schedules';
 
 export const DEFAULT_SCHEDULES = {
-  airport_reset: { enabled: false, type: 'daily', hour: 4, minute: 0, intervalHours: 24 },
-  traffic_stats: { enabled: false, type: 'daily', hour: 3, minute: 0, intervalHours: 6 },
+  airport_reset: { enabled: false, cron: '0 4 * * *' },
+  traffic_stats: { enabled: false, cron: '0 3 * * *' },
+  latency: { enabled: false, cron: '0 5 * * *', airports: [] },
 };
 
 const RUNNERS = {
   airport_reset: runAllAirportResets,
   traffic_stats: () => runTrafficStats({ refetch: true }),
+  latency: () => runLatencyCheck(getSchedules().latency.airports),
 };
 
 // 到期/超限告警不做成用户可配的定时任务：事件驱动条件（流量超限、机场用量）已在
@@ -28,10 +28,21 @@ const RUNNERS = {
 const ALERT_SWEEP_MS = 3600000;
 let alertSweeping = false;
 
-function clampInt(v, min, max, dflt) {
-  const n = Math.round(Number(v));
-  if (Number.isNaN(n)) return dflt;
-  return Math.min(max, Math.max(min, n));
+// Legacy → cron migration: older installs stored {type:'daily',hour,minute} or
+// {type:'interval',intervalHours}. Synthesise an equivalent cron so their config
+// keeps working after the switch to Cron-only scheduling.
+function legacyToCron(s, def) {
+  if (s.cron && isValidCron(s.cron)) return s.cron;
+  if (s.type === 'interval') {
+    const n = Math.min(23, Math.max(1, Math.round(Number(s.intervalHours) || 24)));
+    return n >= 24 ? '0 0 * * *' : `0 */${n} * * *`;
+  }
+  if (s.type === 'daily' && s.hour != null) {
+    const h = Math.min(23, Math.max(0, Math.round(Number(s.hour) || 0)));
+    const m = Math.min(59, Math.max(0, Math.round(Number(s.minute) || 0)));
+    return `${m} ${h} * * *`;
+  }
+  return def.cron;
 }
 
 // Merge stored config over defaults and normalise fields.
@@ -41,14 +52,13 @@ export function getSchedules() {
   const out = {};
   for (const [key, def] of Object.entries(DEFAULT_SCHEDULES)) {
     const s = stored[key] || {};
+    const cron = legacyToCron(s, def);
     out[key] = {
       enabled: !!s.enabled,
-      type: s.type === 'interval' ? 'interval' : 'daily',
-      hour: clampInt(s.hour, 0, 23, def.hour),
-      minute: clampInt(s.minute, 0, 59, def.minute),
-      intervalHours: clampInt(s.intervalHours, 1, 168, def.intervalHours),
+      cron,
       lastRun: Number(getSetting(`schedule_last_${key}`, 0)) || 0,
     };
+    if ('airports' in def) out[key].airports = Array.isArray(s.airports) ? s.airports : def.airports;
   }
   return out;
 }
@@ -56,15 +66,13 @@ export function getSchedules() {
 export function setSchedules(input = {}) {
   const cur = getSchedules();
   const merged = {};
-  for (const key of Object.keys(DEFAULT_SCHEDULES)) {
+  for (const [key, def] of Object.entries(DEFAULT_SCHEDULES)) {
     const s = { ...cur[key], ...(input[key] || {}) };
-    merged[key] = {
-      enabled: !!s.enabled,
-      type: s.type === 'interval' ? 'interval' : 'daily',
-      hour: clampInt(s.hour, 0, 23, DEFAULT_SCHEDULES[key].hour),
-      minute: clampInt(s.minute, 0, 59, DEFAULT_SCHEDULES[key].minute),
-      intervalHours: clampInt(s.intervalHours, 1, 168, DEFAULT_SCHEDULES[key].intervalHours),
-    };
+    const cron = isValidCron(s.cron) ? s.cron.trim() : def.cron;
+    merged[key] = { enabled: !!s.enabled, cron };
+    if ('airports' in def) {
+      merged[key].airports = Array.isArray(s.airports) ? s.airports.map(Number).filter((n) => !Number.isNaN(n)) : [];
+    }
   }
   setSetting(SCHEDULES_KEY, JSON.stringify(merged));
   return getSchedules();
@@ -73,21 +81,15 @@ export function setSchedules(input = {}) {
 // Human-readable summary of a schedule config, shown on the panel.
 export function describeSchedule(s) {
   if (!s || !s.enabled) return '未开启定时任务';
-  if (s.type === 'interval') return `每 ${s.intervalHours} 小时自动运行一次`;
-  return `每天 ${String(s.hour).padStart(2, '0')}:${String(s.minute).padStart(2, '0')} 自动运行`;
+  return describeCron(s.cron);
 }
 
 function isDue(s, now) {
-  if (!s.enabled) return false;
-  if (s.type === 'interval') {
-    return now - (s.lastRun || 0) >= s.intervalHours * 3600000;
-  }
-  // daily: match HH:MM in local time, and don't run twice in the same local day
+  if (!s.enabled || !s.cron) return false;
   const d = new Date(now);
-  if (d.getHours() !== s.hour || d.getMinutes() !== s.minute) return false;
-  if (!s.lastRun) return true;
-  const last = new Date(s.lastRun);
-  return last.toDateString() !== d.toDateString();
+  if (!cronMatch(s.cron, d)) return false;
+  // cron granularity is 1 minute; don't fire twice within the same minute
+  return Math.floor((s.lastRun || 0) / 60000) !== Math.floor(now / 60000);
 }
 
 const running = new Set();

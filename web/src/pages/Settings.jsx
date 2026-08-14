@@ -14,6 +14,7 @@ export default function Settings({ toast, onAccountChange }) {
       <div style={{ display: 'grid', gap: 20, maxWidth: 720 }}>
         <AccountCard settings={settings} toast={toast} onChanged={onAccountChange} />
         <NotifyCard toast={toast} />
+        <NodeExcludeCard toast={toast} />
         <TwoFACard settings={settings} toast={toast} reload={load} />
         <DevicesCard toast={toast} />
       </div>
@@ -128,6 +129,43 @@ function NotifyCard({ toast }) {
       <div className="btn-row" style={{ marginTop: 12 }}>
         <button className="btn primary" onClick={save} disabled={saving}>{saving ? <span className="spin" /> : '保存告警设置'}</button>
         <button className="btn" onClick={test} disabled={testing}>{testing ? <span className="spin" /> : '发送测试'}</button>
+      </div>
+    </div>
+  );
+}
+
+function NodeExcludeCard({ toast }) {
+  const [value, setValue] = useState(null);
+  const [def, setDef] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    API.getNodeExclude().then((r) => { setValue(r.value || ''); setDef(r.default || ''); }).catch((e) => toast.error(e.message));
+  }, [toast]);
+  if (value === null) return <div className="card"><h3 style={{ marginTop: 0 }}>🧹 全局节点排除</h3><div className="muted small"><span className="spin" /></div></div>;
+
+  const save = async () => {
+    setSaving(true);
+    try { const r = await API.saveNodeExclude(value); setValue(r.value || ''); toast.success('全局节点排除已保存'); }
+    catch (e) { toast.error(e.message); } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="card">
+      <h3 style={{ marginTop: 0 }}>🧹 全局节点排除</h3>
+      <p className="muted small">
+        一条正则（不区分大小写），名称匹配的节点会被全局丢弃——用来清掉机场塞进订阅的广告/通知节点（流量、到期、官网…）。
+        用 <code>|</code> 分隔关键词。留空表示不排除。
+      </p>
+      <div className="field">
+        <label>排除正则</label>
+        <textarea rows={4} className="mono" style={{ width: '100%', resize: 'vertical' }}
+          value={value} onChange={(e) => setValue(e.target.value)} placeholder="官网|流量|到期|..." />
+      </div>
+      <p className="muted small">导入机场时即时对新拉取生效（旧节点下次拉取时清理）；下发订阅时也即时生效。</p>
+      <div className="btn-row">
+        <button className="btn primary" onClick={save} disabled={saving}>{saving ? <span className="spin" /> : '保存'}</button>
+        <button className="btn" onClick={() => setValue(def)} title="恢复内置默认排除词">恢复默认</button>
       </div>
     </div>
   );

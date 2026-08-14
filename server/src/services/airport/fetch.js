@@ -1,7 +1,7 @@
-import { db } from '../../db.js';
+import { db, getSetting } from '../../db.js';
 import { proxyDispatcher, xfetch } from './proxy.js';
 import { parseSubscription, parseUserInfo } from '../nodeParser.js';
-import { processAirportNodes } from '../nodeProcess.js';
+import { processAirportNodes, combineExclude } from '../nodeProcess.js';
 import { detectChallenge, ANTIBOT_HINT } from './antibot.js';
 import { accumulateUsed } from '../util.js';
 import { maybeSendAirportAlert } from '../alerts.js';
@@ -44,6 +44,9 @@ export async function fetchAirport(airportId) {
 
   const rawNodes = parseSubscription(text);
   const filter = safeJson(ap.node_filter, {});
+  // fold the global node-exclude regex into this airport's exclude so junk nodes
+  // (traffic/expiry notices, ad links) never enter the node table.
+  filter.exclude = combineExclude(getSetting('global_node_exclude', ''), filter.exclude);
   const nodes = processAirportNodes(rawNodes, filter);
 
   const info = parseUserInfo(resHeaders.get('subscription-userinfo'));

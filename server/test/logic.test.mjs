@@ -5,6 +5,8 @@ import { toBase64, toClash, toSingbox, toSurge, toQuanX, toLoon, detectFormat } 
 import { DEFAULT_TEMPLATES } from '../src/services/subscription/defaultTemplates.js';
 import { accumulateUsed } from '../src/services/util.js';
 import { signAction, verifyAction } from '../src/services/actionToken.js';
+import { cronMatch, isValidCron, describeCron } from '../src/services/cron.js';
+import { combineExclude, DEFAULT_GLOBAL_EXCLUDE } from '../src/services/nodeProcess.js';
 import { load as yamlLoad } from 'js-yaml';
 
 let pass = 0, fail = 0;
@@ -170,6 +172,42 @@ ok(quanRendered.includes('[filter_remote]') && !quanRendered.includes('<PROXY_NA
   let signRejected = false;
   try { signAction({ t: 'delete', ap: 1 }); } catch { signRejected = true; }
   ok(signRejected, 'signAction rejects unknown action');
+}
+
+// --- cron matcher + description ---
+{
+  // build dates from LOCAL components so getHours/getDay match the intended wall
+  // clock regardless of the test runner's timezone (CI runs UTC; app runs UTC+8).
+  const local = (y, mo, d, h, mi) => new Date(y, mo - 1, d, h, mi);
+  ok(local(2026, 8, 17, 9, 0).getDay() === 1, 'test fixture: 2026-08-17 is Monday');
+  ok(cronMatch('30 3 * * *', local(2026, 8, 14, 3, 30)), 'cron daily match');
+  ok(!cronMatch('0 3 * * *', local(2026, 8, 14, 3, 30)), 'cron daily non-match minute');
+  ok(cronMatch('*/15 * * * *', local(2026, 8, 14, 10, 45)), 'cron step match');
+  ok(!cronMatch('*/15 * * * *', local(2026, 8, 14, 10, 46)), 'cron step non-match');
+  ok(cronMatch('0 9 * * 1', local(2026, 8, 17, 9, 0)), 'cron weekday (Mon) match');
+  ok(!cronMatch('0 9 * * 1', local(2026, 8, 18, 9, 0)), 'cron weekday non-match (Tue)');
+  ok(cronMatch('0 8-10 * * *', local(2026, 8, 14, 9, 0)), 'cron range match');
+  ok(cronMatch('0 8,20 * * *', local(2026, 8, 14, 20, 0)), 'cron list match');
+  ok(isValidCron('0 3 * * *') && !isValidCron('99 3 * * *') && !isValidCron('* * * *'), 'cron validity');
+  ok(describeCron('30 3 * * *') === '每天 03:30', `describeCron daily -> ${describeCron('30 3 * * *')}`);
+  ok(describeCron('0 9 * * 1') === '每周周一 09:00', `describeCron weekly -> ${describeCron('0 9 * * 1')}`);
+  ok(describeCron('0 */2 * * *') === '每 2 小时（第 0 分）', `describeCron everyN -> ${describeCron('0 */2 * * *')}`);
+}
+
+// --- global node exclude ---
+{
+  const combined = combineExclude(DEFAULT_GLOBAL_EXCLUDE, '自定义排除');
+  const re = new RegExp(combined, 'i');
+  ok(re.test('剩余流量 1024GB') && re.test('官网 example.com') && re.test('自定义排除节点'), 'global exclude matches junk + custom');
+  ok(!re.test('香港 01') && !re.test('美国 IEPL 专线'), 'global exclude keeps real nodes');
+  const nodes = [
+    { name: '香港01', type: 'ss', server: 'a', port: 1, raw: {} },
+    { name: '距离下次重置剩余', type: 'ss', server: 'b', port: 2, raw: {} },
+    { name: '官网 buy.example.com', type: 'ss', server: 'c', port: 3, raw: {} },
+  ];
+  const kept = filterNodes(nodes, { exclude: DEFAULT_GLOBAL_EXCLUDE }).map((n) => n.name);
+  ok(kept.length === 1 && kept[0] === '香港01', `filterNodes global exclude -> ${kept.join(',')}`);
+  ok(combineExclude('', null, 'a') === '(?:a)' && combineExclude() === '', 'combineExclude skips empties');
 }
 
 // --- UA detection ---

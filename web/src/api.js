@@ -45,6 +45,9 @@ export const API = {
   getNotify: () => api.get('/api/settings/notify'),
   saveNotify: (b) => api.put('/api/settings/notify', b),
   testNotify: () => api.post('/api/settings/notify/test', {}),
+  // 全局节点排除
+  getNodeExclude: () => api.get('/api/settings/node-exclude'),
+  saveNodeExclude: (value) => api.put('/api/settings/node-exclude', { value }),
   // groups
   groups: (kind) => api.get(`/api/groups?kind=${kind}`),
   createGroup: (b) => api.post('/api/groups', b),
@@ -55,6 +58,7 @@ export const API = {
   runAirportReset: (airportId) => api.post('/api/automation/airport-reset', airportId ? { airportId } : {}),
   runTrafficStats: () => api.post('/api/automation/traffic-stats', {}),
   runAlerts: () => api.post('/api/automation/alerts', {}),
+  runLatency: (airports) => api.post('/api/automation/latency', { airports: airports || [] }),
   saveSchedules: (schedules) => api.put('/api/automation/schedule', { schedules }),
   testAirportReset: (airportId) => api.post('/api/automation/test-reset', { airportId }),
   // airports

@@ -12,6 +12,24 @@
 //                                 // drop timed-out nodes; undefined = no limit.
 // }
 
+// Default "全局节点正则排除" template — common junk/ad node names that机场 stuff
+// into subscriptions (traffic/expiry notices, official-site links, invites…).
+// Deliberately conservative: only clear-cut ad/notice words, to avoid dropping
+// real nodes. Admins can edit it in 设置 · 全局节点排除.
+export const DEFAULT_GLOBAL_EXCLUDE = [
+  '官网', '官方', '流量', '剩余', '到期', '过期', '重置', '续费', '购买', '下单',
+  '优惠', '折扣', '邀请', '试用', '群', '频道', '电报', 'telegram', 't\\.me',
+  '网址', '域名', '客服', '工单', '公告', '通知', '升级', '备用', '发布页',
+  '防失联', '失联', '永久', '无限', '限时', 'expire', 'traffic', 'reset', 'balance',
+].join('|');
+
+// OR-combine several regex source strings into one (each wrapped so alternations
+// inside a part don't leak). Empty/falsy parts are skipped.
+export function combineExclude(...exprs) {
+  const parts = exprs.filter(Boolean).map((s) => `(?:${s})`);
+  return parts.length ? parts.join('|') : '';
+}
+
 function toRegExp(pattern) {
   if (!pattern) return null;
   try {

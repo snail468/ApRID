@@ -5,9 +5,19 @@ import { authenticator } from 'otplib';
 import { db, getSetting, setSetting } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getNotifyConfigMasked, saveNotifyConfig, unmaskPatch, sendTestNotification } from '../services/notify.js';
+import { DEFAULT_GLOBAL_EXCLUDE } from '../services/nodeProcess.js';
 
 const router = express.Router();
 router.use(requireAuth);
+
+// ---- 全局节点正则排除 ----
+router.get('/node-exclude', (req, res) => {
+  res.json({ value: getSetting('global_node_exclude', ''), default: DEFAULT_GLOBAL_EXCLUDE });
+});
+router.put('/node-exclude', (req, res) => {
+  setSetting('global_node_exclude', String(req.body?.value ?? '').trim());
+  res.json({ ok: true, value: getSetting('global_node_exclude', '') });
+});
 
 // ---- 告警通知配置 ----
 router.get('/notify', (req, res) => res.json(getNotifyConfigMasked()));
