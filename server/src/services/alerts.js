@@ -23,10 +23,17 @@ function shouldSend(row, key, now, cd) {
   return row.alert_key !== key || !row.alert_at || (cd > 0 && now - row.alert_at >= cd);
 }
 
-// user condition -> dedup key ('expired' | 'exhausted' | null)
-export function evalUserReason(u) {
+// user condition -> dedup key ('expired' | 'exhausted' | 'expiring' | null)
+export function evalUserReason(u, now = Date.now()) {
   const s = userStatus(u);
-  return s === 'expired' ? 'expired' : s === 'exhausted' ? 'exhausted' : null;
+  if (s === 'expired') return 'expired';
+  if (s === 'exhausted') return 'exhausted';
+  // time-driven renewal reminder: enabled, not yet expired, ≤ 1 day left
+  if (u.enabled && u.expire_at) {
+    const left = u.expire_at - now;
+    if (left > 0 && left <= DAY_MS) return 'expiring';
+  }
+  return null;
 }
 
 // airport condition -> { reasons:[], key:'traffic|expire' } (key '' = no alert)
@@ -60,11 +67,15 @@ export async function maybeSendUserAlert(userId) {
   const now = Date.now();
   if (!shouldSend(u, reason, now, cooldownMs())) return { sent: false };
 
-  let filter = {};
-  try { filter = JSON.parse(u.node_filter || '{}'); } catch { /* noop */ }
-  const airports = (Array.isArray(filter.airports) && filter.airports.length
-    ? filter.airports.map((id) => db.prepare('SELECT * FROM airports WHERE id = ?').get(id))
-    : db.prepare('SELECT * FROM airports').all()).filter(Boolean);
+  // the ≤1-day renewal reminder needs no airports (no reset involved)
+  let airports = [];
+  if (reason !== 'expiring') {
+    let filter = {};
+    try { filter = JSON.parse(u.node_filter || '{}'); } catch { /* noop */ }
+    airports = (Array.isArray(filter.airports) && filter.airports.length
+      ? filter.airports.map((id) => db.prepare('SELECT * FROM airports WHERE id = ?').get(id))
+      : db.prepare('SELECT * FROM airports').all()).filter(Boolean);
+  }
 
   const results = await notify(buildUserAlert({ ...u, __reason: reason }, airports));
   db.prepare('UPDATE users SET alert_key = ?, alert_at = ? WHERE id = ?').run(reason, now, u.id);

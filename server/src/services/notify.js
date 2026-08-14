@@ -143,10 +143,33 @@ function airportUsageLine(ap) {
   return { used, total, expire };
 }
 
+// User about to expire (≤ 1 day) → just remind the operator to nudge the user to
+// renew. No airport reset involved, so no manual-reset steps / refill links.
+export function buildUserExpiringAlert(user) {
+  const expireAt = Number(user.expire_at);
+  const left = Math.max(0, expireAt - Date.now());
+  const h = Math.floor(left / 3600000);
+  const m = Math.floor((left % 3600000) / 60000);
+  const remain = h > 0 ? `约 ${h} 小时${m ? ` ${m} 分` : ''}` : `约 ${m} 分钟`;
+  const expireStr = new Date(expireAt).toLocaleString('zh-CN');
+  const subject = `⚠ 用户「${user.name}」即将到期（≤1天）`;
+  const html = `
+    <div style="font-family:sans-serif;max-width:600px">
+      <h2>⚠ 用户「${escapeHtml(user.name)}」即将到期</h2>
+      <p>该用户订阅将在 <b>${escapeHtml(remain)}</b> 后到期，请提醒其<strong>续费</strong>。</p>
+      <div><b>到期时间：</b>${escapeHtml(expireStr)}</div>
+      ${user.remark ? `<div><b>备注：</b>${escapeHtml(user.remark)}</div>` : ''}
+    </div>`;
+  const text = `⚠ 用户「${user.name}」即将到期（≤1天）\n将在${remain}后到期，请提醒其续费。\n到期时间：${expireStr}` +
+    (user.remark ? `\n备注：${user.remark}` : '');
+  return { subject, html, text, buttons: [] };
+}
+
 // User expired / traffic exhausted → operator needs to (manually) reset the
 // airports this user pulls from, then refill the fresh link. One refill link per
 // airport, opening the login-free page.
 export function buildUserAlert(user, airports, base = panelBaseUrl()) {
+  if (user.__reason === 'expiring') return buildUserExpiringAlert(user);
   const reason = user.__reason === 'expired' ? '已到期' : '流量已用完';
   const subject = `⚠ 用户「${user.name}」${reason}`;
   const buttons = [];
