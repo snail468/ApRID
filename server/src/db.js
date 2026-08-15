@@ -156,9 +156,37 @@ CREATE TABLE IF NOT EXISTS renewals (
   created_at    INTEGER NOT NULL
 );
 
+-- daily-ish snapshots of an airport's cumulative used traffic, for trend charts
+-- and trailing-window consumption (used to price 流量套餐 airports).
+CREATE TABLE IF NOT EXISTS traffic_snapshots (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  airport_id INTEGER,
+  cum        INTEGER,   -- monotonic used_traffic_cum
+  used       INTEGER,   -- raw used_traffic
+  total      INTEGER,
+  ts         INTEGER NOT NULL
+);
+
+-- per-airport cost ledger: every payment (开通/续费/买量/加油). kind:
+--   'time'   = 时长套餐 (amount 元 / days 天)  -> monthly = amount/days*30
+--   'traffic'= 流量套餐/买量 (amount 元 / traffic_gb GB) -> 单价 = Σamount/Σgb
+--   'topup'  = 时长机场的一次性加油/重置 (amount 元) -> 计入当月
+CREATE TABLE IF NOT EXISTS airport_costs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  airport_id INTEGER,
+  kind       TEXT NOT NULL,
+  amount     REAL,
+  traffic_gb REAL,
+  days       INTEGER,
+  note       TEXT,
+  created_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_nodes_airport ON nodes(airport_id);
 CREATE INDEX IF NOT EXISTS idx_users_token   ON users(token);
 CREATE INDEX IF NOT EXISTS idx_sub_logs_user ON sub_logs(user_id, id);
+CREATE INDEX IF NOT EXISTS idx_snap_airport  ON traffic_snapshots(airport_id, ts);
+CREATE INDEX IF NOT EXISTS idx_costs_airport ON airport_costs(airport_id, id);
 `);
 
 // ---- lightweight migrations: add columns that may be missing on older DBs ----
@@ -183,6 +211,8 @@ ensureColumns('airports', {
   // "付了多少钱 / 多少天一个周期" input so it can be re-edited.
   fetch_fail_count: 'INTEGER', last_fetch_ok: 'INTEGER',
   cost: 'REAL', cost_amount: 'REAL', cost_cycle_days: 'INTEGER',
+  // 'time' | 'traffic' — how this airport is billed (drives monthly-cost calc)
+  cost_type: "TEXT DEFAULT 'time'",
 });
 
 // Backfill raw cost input for rows that only had the old monthly `cost` value.
@@ -190,6 +220,20 @@ db.exec(`
   UPDATE airports SET cost_amount = cost, cost_cycle_days = 30
    WHERE cost IS NOT NULL AND cost_amount IS NULL
 `);
+
+// Migrate legacy per-airport cost fields into the cost ledger (once): any airport
+// that has a cost but no ledger rows gets a 'time' package record.
+{
+  const legacy = db.prepare(
+    'SELECT id, cost_amount, cost_cycle_days FROM airports WHERE cost_amount IS NOT NULL AND id NOT IN (SELECT DISTINCT airport_id FROM airport_costs)'
+  ).all();
+  if (legacy.length) {
+    const now = Date.now();
+    const ins = db.prepare('INSERT INTO airport_costs (airport_id, kind, amount, days, created_at) VALUES (?,?,?,?,?)');
+    const setType = db.prepare("UPDATE airports SET cost_type = COALESCE(cost_type, 'time') WHERE id = ?");
+    for (const a of legacy) { ins.run(a.id, 'time', a.cost_amount, a.cost_cycle_days || 30, now); setType.run(a.id); }
+  }
+}
 ensureColumns('users', {
   traffic_base: 'INTEGER', traffic_used: 'INTEGER',
   traffic_limit: 'INTEGER', traffic_updated_at: 'INTEGER',

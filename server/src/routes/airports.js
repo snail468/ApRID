@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { fetchAirport } from '../services/airport/fetch.js';
 import { runAirportReset, runManualReset } from '../services/automation.js';
 import { detectPanelType } from '../services/airport/adapters.js';
+import { airportTrend } from '../services/accounting.js';
 
 const router = express.Router();
 router.use(requireAuth);
@@ -11,7 +12,7 @@ router.use(requireAuth);
 const FIELDS = ['name', 'url', 'account', 'password', 'sub_url', 'panel_type',
   'request_headers', 'user_agent', 'cookie', 'auth_token', 'proxy', 'group_name', 'remark', 'node_filter',
   'expire_at', 'used_traffic', 'total_traffic', 'reset_mode', 'flaresolverr_url',
-  'cost', 'cost_amount', 'cost_cycle_days'];
+  'cost', 'cost_amount', 'cost_cycle_days', 'cost_type'];
 
 function normalize(body) {
   const out = {};
@@ -45,6 +46,29 @@ router.post('/detect', async (req, res) => {
 router.get('/', (req, res) => {
   const rows = db.prepare('SELECT * FROM airports ORDER BY id DESC').all();
   res.json(rows.map(withCounts));
+});
+
+// ---- 成本流水 (cost ledger) + 趋势/记账 ----
+const numOrNull = (v) => (v === '' || v == null ? null : Number(v));
+router.get('/:id/costs', (req, res) => {
+  res.json(db.prepare('SELECT * FROM airport_costs WHERE airport_id = ? ORDER BY id DESC').all(req.params.id));
+});
+router.post('/:id/costs', (req, res) => {
+  const { kind, amount, traffic_gb, days, note } = req.body || {};
+  if (!['time', 'traffic', 'topup'].includes(kind)) return res.status(400).json({ error: '类型无效' });
+  db.prepare('INSERT INTO airport_costs (airport_id, kind, amount, traffic_gb, days, note, created_at) VALUES (?,?,?,?,?,?,?)')
+    .run(req.params.id, kind, numOrNull(amount), numOrNull(traffic_gb), numOrNull(days), note || null, Date.now());
+  res.json({ ok: true });
+});
+router.delete('/:id/costs/:cid', (req, res) => {
+  db.prepare('DELETE FROM airport_costs WHERE id = ? AND airport_id = ?').run(req.params.cid, req.params.id);
+  res.json({ ok: true });
+});
+// daily-usage trend + accounting KPIs for one airport
+router.get('/:id/trend', (req, res) => {
+  const ap = db.prepare('SELECT id FROM airports WHERE id = ?').get(req.params.id);
+  if (!ap) return res.status(404).json({ error: '机场不存在' });
+  res.json(airportTrend(Number(req.params.id)));
 });
 
 router.get('/:id', (req, res) => {

@@ -83,6 +83,10 @@ export const API = {
   batchFetchAirports: (ids) => api.post('/api/airports/batch/fetch', { ids }),
   resetAirport: (id) => api.post(`/api/airports/${id}/reset`),
   manualResetAirport: (id, sub_url) => api.post(`/api/airports/${id}/manual-reset`, { sub_url }),
+  airportCosts: (id) => api.get(`/api/airports/${id}/costs`),
+  addAirportCost: (id, b) => api.post(`/api/airports/${id}/costs`, b),
+  deleteAirportCost: (id, cid) => api.del(`/api/airports/${id}/costs/${cid}`),
+  airportTrend: (id) => api.get(`/api/airports/${id}/trend`),
   // nodes
   nodes: (qs = '') => api.get(`/api/nodes${qs}`),
   deleteNode: (id) => api.del(`/api/nodes/${id}`),

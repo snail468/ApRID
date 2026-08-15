@@ -25,6 +25,21 @@ export async function httpGet(url, { headers = {}, proxy, method = 'GET', body, 
 }
 
 // Fetch an airport's subscription, parse nodes, store, and update traffic/expiry.
+// keep one snapshot per calendar day (UTC+8, via process TZ): update today's row
+// to the latest cumulative value, otherwise insert a new day.
+function sameDay(a, b) {
+  const d1 = new Date(Number(a)), d2 = new Date(Number(b));
+  return d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
+}
+function recordDailySnapshot(airportId, cum, used, total, now) {
+  const last = db.prepare('SELECT id, ts FROM traffic_snapshots WHERE airport_id = ? ORDER BY id DESC LIMIT 1').get(airportId);
+  if (last && sameDay(last.ts, now)) {
+    db.prepare('UPDATE traffic_snapshots SET cum = ?, used = ?, total = ?, ts = ? WHERE id = ?').run(cum, used, total, now, last.id);
+  } else {
+    db.prepare('INSERT INTO traffic_snapshots (airport_id, cum, used, total, ts) VALUES (?,?,?,?,?)').run(airportId, cum, used, total, now);
+  }
+}
+
 export async function fetchAirport(airportId) {
   const ap = db.prepare('SELECT * FROM airports WHERE id = ?').get(airportId);
   if (!ap) throw new Error('机场不存在');
@@ -86,6 +101,10 @@ async function doFetchAirport(airportId, ap) {
     ).run(now, now, info.used ?? null, cum, last, info.total ?? null, info.expire ?? null, now, airportId);
   });
   tx();
+
+  // record a daily traffic snapshot (one row per calendar day, kept at latest value)
+  // for trend charts and trailing-window consumption pricing.
+  if (cum != null) recordDailySnapshot(airportId, cum, info.used ?? null, info.total ?? null, now);
 
   // event-driven: usage/expiry just changed → evaluate the airport-side alert
   // (deduped in alerts.js; non-blocking so the pull isn't delayed by notify I/O).

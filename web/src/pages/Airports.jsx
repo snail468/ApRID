@@ -20,6 +20,7 @@ export default function Airports({ toast }) {
   const { data: groups = [], refresh: refreshGroups } = useCachedResource('groups:airport', () => API.groups('airport'));
   const [editing, setEditing] = useState(null);
   const [manual, setManual] = useState(null);
+  const [costAirport, setCostAirport] = useState(null);
   const [busy, setBusy] = useState({});
   const [showGroups, setShowGroups] = useState(false);
   const [batchGroup, setBatchGroup] = useState('');
@@ -133,6 +134,7 @@ export default function Airports({ toast }) {
                         { label: '拉取订阅', disabled: !!busy[a.id], onClick: () => doFetch(a.id) },
                         { label: '自动重置', disabled: !!busy[a.id], title: '后台自动登录重置', onClick: () => doReset(a.id) },
                         { label: '手动重置', title: '自己登录机场重置后粘贴新链接', onClick: () => setManual(a) },
+                        { label: '成本/趋势', title: '成本记账与流量趋势', onClick: () => setCostAirport(a) },
                         { label: '编辑', onClick: () => setEditing(a) },
                         { label: '删除', danger: true, onClick: () => doDelete(a.id) },
                       ]} />
@@ -167,6 +169,7 @@ export default function Airports({ toast }) {
 
       {editing && <AirportModal airport={editing} groups={groups} toast={toast} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); refreshGroups(); }} />}
       {manual && <ManualResetModal airport={manual} toast={toast} onClose={() => setManual(null)} onDone={() => { setManual(null); invalidate('nodes:'); load(); }} />}
+      {costAirport && <CostTrendModal airport={costAirport} toast={toast} onClose={() => setCostAirport(null)} onChanged={load} />}
       {showGroups && <GroupManagerModal kind="airport" title="机场分组管理" toast={toast} onClose={() => setShowGroups(false)} onChanged={() => { refreshGroups(); load(); }} />}
       {confirmNode}
     </>
@@ -212,8 +215,6 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
     request_headers: safeParse(airport.request_headers),
     node_filter: safeParse(airport.node_filter),
     expire_at: toDatetimeLocal(airport.expire_at),
-    cost_amount: airport.cost_amount ?? '',
-    cost_cycle_days: airport.cost_cycle_days || 30,
   });
   const [saving, setSaving] = useState(false);
   const [detecting, setDetecting] = useState(false);
@@ -233,17 +234,11 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
   const save = async () => {
     if (!f.name.trim()) return toast.error('机场名称必填');
     setSaving(true);
-    const amount = f.cost_amount === '' ? null : Number(f.cost_amount);
-    const cycle = Number(f.cost_cycle_days) || 30;
     const body = {
       ...f,
       request_headers: JSON.stringify(f.request_headers || {}),
       node_filter: JSON.stringify(f.node_filter || {}),
       expire_at: fromDatetimeLocal(f.expire_at),
-      cost_amount: amount,
-      cost_cycle_days: cycle,
-      // normalized 每月成本 used by 收益记账
-      cost: amount == null ? null : Math.round((amount / cycle) * 30 * 100) / 100,
     };
     try {
       if (isNew) await API.createAirport(body);
@@ -334,20 +329,123 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
       <NodeProcessingEditor value={f.node_filter} onChange={(v) => set('node_filter', v)} />
 
       <div className="field" style={{ marginTop: 14 }}><label>备注</label><input value={f.remark} onChange={(e) => set('remark', e.target.value)} /></div>
-      <div className="field-row" style={{ marginTop: 14 }}>
-        <div className="field"><label>成本金额 (按套餐付费)</label><input type="number" min="0" step="0.01" value={f.cost_amount} onChange={(e) => set('cost_amount', e.target.value)} placeholder="如 90" /></div>
-        <div className="field"><label>计费周期</label>
-          <select value={f.cost_cycle_days} onChange={(e) => set('cost_cycle_days', Number(e.target.value))}>
-            <option value={30}>月付 (30天)</option>
-            <option value={90}>季付 (90天)</option>
-            <option value={180}>半年 (180天)</option>
-            <option value={365}>年付 (365天)</option>
+      <div className="muted small" style={{ marginTop: 8 }}>💡 成本记账与流量趋势请在机场列表「操作 → 成本/趋势」中管理。</div>
+    </Modal>
+  );
+}
+
+/* ---------------- 成本/趋势 ---------------- */
+function UsageChart({ snapshots }) {
+  const pts = [];
+  for (let i = 1; i < snapshots.length; i++) pts.push({ ts: snapshots[i].ts, v: Math.max(0, snapshots[i].cum - snapshots[i - 1].cum) });
+  const last = pts.slice(-30);
+  if (!last.length) return <div className="muted small">暂无足够快照（每次拉取机场按天积累，明天起会有曲线）。</div>;
+  const max = Math.max(1, ...last.map((p) => p.v));
+  const W = 520, H = 120, pad = 18, bw = (W - pad * 2) / last.length;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto' }}>
+      {last.map((p, i) => {
+        const h = (p.v / max) * (H - pad * 2);
+        return <rect key={i} x={pad + i * bw + 1} y={H - pad - h} width={Math.max(1, bw - 2)} height={h} fill="var(--accent)" rx="1"><title>{`${fmtDate(p.ts)}：${fmtBytes(p.v)}`}</title></rect>;
+      })}
+      <line x1={pad} y1={H - pad} x2={W - pad} y2={H - pad} stroke="var(--border)" />
+    </svg>
+  );
+}
+
+function CostTrendModal({ airport, toast, onClose, onChanged }) {
+  const [costType, setCostType] = useState(airport.cost_type || 'time');
+  const [trend, setTrend] = useState(null);
+  const [costs, setCosts] = useState([]);
+  const [form, setForm] = useState({ kind: 'time', amount: '', traffic_gb: '', days: 30, note: '' });
+
+  const load = () => {
+    API.airportTrend(airport.id).then(setTrend).catch((e) => toast.error(e.message));
+    API.airportCosts(airport.id).then(setCosts).catch(() => {});
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [airport.id]);
+
+  const changeType = async (t) => {
+    setCostType(t);
+    setForm((f) => ({ ...f, kind: t === 'traffic' ? 'traffic' : 'time' }));
+    try { await API.updateAirport(airport.id, { cost_type: t }); load(); onChanged?.(); }
+    catch (e) { toast.error(e.message); }
+  };
+  const addCost = async () => {
+    if (form.amount === '') return toast.error('请填写金额');
+    try {
+      await API.addAirportCost(airport.id, {
+        kind: form.kind, amount: Number(form.amount),
+        traffic_gb: form.traffic_gb === '' ? null : Number(form.traffic_gb),
+        days: form.days === '' ? null : Number(form.days), note: form.note || null,
+      });
+      setForm((f) => ({ ...f, amount: '', traffic_gb: '', note: '' }));
+      load(); onChanged?.(); toast.success('已记一笔');
+    } catch (e) { toast.error(e.message); }
+  };
+  const delCost = async (cid) => { try { await API.deleteAirportCost(airport.id, cid); load(); onChanged?.(); } catch (e) { toast.error(e.message); } };
+
+  const KIND_LABEL = { time: '时长套餐', traffic: '流量买量', topup: '加油/重置' };
+
+  return (
+    <Modal wide title={`成本 / 趋势 · ${airport.name}`} onClose={onClose}
+      footer={<button className="btn" onClick={onClose}>关闭</button>}>
+      <div className="field-row" style={{ alignItems: 'end' }}>
+        <div className="field"><label>计费类型</label>
+          <select value={costType} onChange={(e) => changeType(e.target.value)}>
+            <option value="time">时长套餐（元/周期）</option>
+            <option value="traffic">流量套餐（不限时，按量）</option>
           </select>
         </div>
-        <div className="field"><label>≈ 每月成本</label>
-          <input readOnly value={f.cost_amount === '' ? '-' : `¥${(Number(f.cost_amount) / (Number(f.cost_cycle_days) || 30) * 30).toFixed(2)}`} />
-        </div>
+        {trend && (
+          <div className="field" style={{ flex: 2 }}>
+            <label>记账</label>
+            <div className="small">
+              月成本 <strong>¥{(trend.monthlyCost || 0).toFixed(2)}</strong>
+              {costType === 'traffic' && <>　单价 <strong>¥{(trend.unitPrice || 0).toFixed(3)}/GB</strong>　近30天 {fmtBytes(trend.consumption30d)}</>}
+              {costType === 'traffic' && trend.remaining > 0 && <>　剩余 {fmtBytes(trend.remaining)}{trend.daysLeft != null ? `（约 ${trend.daysLeft} 天）` : ''}</>}
+            </div>
+          </div>
+        )}
       </div>
+
+      <h3 style={{ fontSize: 15, margin: '14px 0 6px' }}>每日用量趋势（近 30 天）</h3>
+      {trend ? <UsageChart snapshots={trend.snapshots || []} /> : <div className="muted small"><span className="spin" /></div>}
+
+      <h3 style={{ fontSize: 15, margin: '16px 0 6px' }}>成本流水</h3>
+      <div className="field-row" style={{ alignItems: 'end' }}>
+        <div className="field"><label>类型</label>
+          <select value={form.kind} onChange={(e) => setForm((f) => ({ ...f, kind: e.target.value }))}>
+            <option value="time">时长套餐（续费/开通）</option>
+            <option value="traffic">流量买量（含用尽重置）</option>
+            <option value="topup">加油/重置（一次性）</option>
+          </select>
+        </div>
+        <div className="field"><label>金额</label><input type="number" min="0" step="0.01" value={form.amount} onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))} /></div>
+        {form.kind === 'traffic' && <div className="field"><label>流量(GB)</label><input type="number" min="0" value={form.traffic_gb} onChange={(e) => setForm((f) => ({ ...f, traffic_gb: e.target.value }))} /></div>}
+        {form.kind === 'time' && <div className="field"><label>周期(天)</label><input type="number" min="1" value={form.days} onChange={(e) => setForm((f) => ({ ...f, days: e.target.value }))} /></div>}
+        <div className="field"><label>备注</label><input value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} /></div>
+        <button className="btn" onClick={addCost}>+ 记一笔</button>
+      </div>
+      {costs.length > 0 && (
+        <div className="table-wrap" style={{ marginTop: 8 }}>
+          <table>
+            <thead><tr><th>时间</th><th>类型</th><th>金额</th><th>流量/周期</th><th>备注</th><th></th></tr></thead>
+            <tbody>
+              {costs.map((c) => (
+                <tr key={c.id}>
+                  <td className="small muted">{fmtDate(c.created_at)}</td>
+                  <td className="small">{KIND_LABEL[c.kind] || c.kind}</td>
+                  <td className="small">¥{Number(c.amount || 0).toFixed(2)}</td>
+                  <td className="small">{c.traffic_gb ? `${c.traffic_gb}GB` : c.days ? `${c.days}天` : '-'}</td>
+                  <td className="small muted">{c.note || '-'}</td>
+                  <td><button className="btn sm danger" onClick={() => delCost(c.id)}>删</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </Modal>
   );
 }
