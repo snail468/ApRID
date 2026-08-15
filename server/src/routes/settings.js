@@ -1,14 +1,68 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import qrcode from 'qrcode';
+import fs from 'node:fs';
+import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { authenticator } from 'otplib';
 import { db, getSetting, setSetting } from '../db.js';
+import { config } from '../config.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getNotifyConfigMasked, saveNotifyConfig, unmaskPatch, sendTestNotification } from '../services/notify.js';
 import { DEFAULT_GLOBAL_EXCLUDE } from '../services/nodeProcess.js';
 
 const router = express.Router();
 router.use(requireAuth);
+
+// ---- 数据库备份 / 恢复 ----
+// Backup: VACUUM INTO makes a consistent single-file snapshot (WAL-safe), streamed
+// as a download; the temp copy is removed afterwards.
+router.get('/backup', (req, res) => {
+  const tmp = path.join(path.dirname(config.dbPath), `.backup-${Date.now()}.db`);
+  try {
+    db.exec(`VACUUM INTO '${tmp.replace(/'/g, "''")}'`);
+  } catch (err) {
+    return res.status(500).json({ error: '备份失败：' + err.message });
+  }
+  const d = new Date();
+  const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
+  res.download(tmp, `aprid-backup-${stamp}.db`, () => { fs.unlink(tmp, () => {}); });
+});
+
+// Restore: accept a raw .db upload, verify it's a valid SQLite DB with our schema,
+// then swap it in and restart the process (docker restart policy brings it back).
+router.post('/restore', express.raw({ type: '*/*', limit: '200mb' }), (req, res) => {
+  const buf = req.body;
+  if (!Buffer.isBuffer(buf) || buf.length < 100) return res.status(400).json({ error: '上传文件为空或过小' });
+  if (buf.slice(0, 16).toString('latin1') !== 'SQLite format 3\0') {
+    return res.status(400).json({ error: '不是有效的 SQLite 数据库文件' });
+  }
+  const staging = config.dbPath + '.restore';
+  try {
+    fs.writeFileSync(staging, buf);
+    const test = new DatabaseSync(staging, { readOnly: true });
+    // must contain our core tables, else it's some other sqlite file
+    test.prepare('SELECT 1 FROM settings LIMIT 1').get();
+    test.prepare('SELECT 1 FROM users LIMIT 1').all();
+    test.close();
+  } catch (err) {
+    try { fs.unlinkSync(staging); } catch { /* noop */ }
+    return res.status(400).json({ error: '数据库校验失败：' + err.message });
+  }
+  res.json({ ok: true, restarting: true });
+  // swap on disk and exit so a clean process reopens the restored DB
+  setTimeout(() => {
+    try {
+      try { db.close(); } catch { /* noop */ }
+      for (const s of ['-wal', '-shm', '']) { try { fs.unlinkSync(config.dbPath + s); } catch { /* noop */ } }
+      fs.renameSync(staging, config.dbPath);
+      console.log('[restore] database replaced, exiting to restart');
+    } catch (err) {
+      console.error('[restore] swap failed:', err.message);
+    }
+    process.exit(0);
+  }, 600);
+});
 
 // ---- 全局节点正则排除 ----
 router.get('/node-exclude', (req, res) => {

@@ -13,20 +13,18 @@ const SCHEDULES_KEY = 'automation_schedules';
 export const DEFAULT_SCHEDULES = {
   airport_reset: { enabled: false, cron: '0 4 * * *' },
   traffic_stats: { enabled: false, cron: '0 3 * * *' },
-  latency: { enabled: false, cron: '0 5 * * *', airports: [] },
+  latency: { enabled: false, cron: '0 5 * * *', airports: [], cleanup: false },
+  // 告警的时间驱动条件（到期/即将到期）无事件可挂，只能定期看钟。默认每小时开启，
+  // 现在也走交互式 Cron，管理员可自行改。事件驱动条件（超限/机场用量）不受此影响。
+  alerts: { enabled: true, cron: '0 * * * *' },
 };
 
 const RUNNERS = {
   airport_reset: runAllAirportResets,
   traffic_stats: () => runTrafficStats({ refetch: true }),
-  latency: () => runLatencyCheck(getSchedules().latency.airports),
+  latency: () => runLatencyCheck(getSchedules().latency.airports, { cleanup: getSchedules().latency.cleanup }),
+  alerts: () => runAlertCheck({ recordEmpty: false }),
 };
-
-// 到期/超限告警不做成用户可配的定时任务：事件驱动条件（流量超限、机场用量）已在
-// 数据变化处就地触发；剩下的时间驱动条件（到期/即将到期）没有事件，只能定期看钟，
-// 因此这里让它每小时后台自动跑一次（无需用户开启）。去重由 alert_key 保证不刷屏。
-const ALERT_SWEEP_MS = 3600000;
-let alertSweeping = false;
 
 // Legacy → cron migration: older installs stored {type:'daily',hour,minute} or
 // {type:'interval',intervalHours}. Synthesise an equivalent cron so their config
@@ -54,11 +52,13 @@ export function getSchedules() {
     const s = stored[key] || {};
     const cron = legacyToCron(s, def);
     out[key] = {
-      enabled: !!s.enabled,
+      // fall back to the default's enabled state only when nothing is stored yet
+      enabled: s.enabled != null ? !!s.enabled : !!def.enabled,
       cron,
       lastRun: Number(getSetting(`schedule_last_${key}`, 0)) || 0,
     };
     if ('airports' in def) out[key].airports = Array.isArray(s.airports) ? s.airports : def.airports;
+    if ('cleanup' in def) out[key].cleanup = s.cleanup != null ? !!s.cleanup : !!def.cleanup;
   }
   return out;
 }
@@ -73,6 +73,7 @@ export function setSchedules(input = {}) {
     if ('airports' in def) {
       merged[key].airports = Array.isArray(s.airports) ? s.airports.map(Number).filter((n) => !Number.isNaN(n)) : [];
     }
+    if ('cleanup' in def) merged[key].cleanup = !!s.cleanup;
   }
   setSetting(SCHEDULES_KEY, JSON.stringify(merged));
   return getSchedules();
@@ -96,18 +97,6 @@ const running = new Set();
 
 async function tick() {
   const now = Date.now();
-
-  // background hourly alert sweep (time-based 到期 conditions have no event hook)
-  const lastSweep = Number(getSetting('alerts_last_sweep', 0)) || 0;
-  if (!alertSweeping && now - lastSweep >= ALERT_SWEEP_MS) {
-    alertSweeping = true;
-    setSetting('alerts_last_sweep', String(now));
-    Promise.resolve()
-      .then(() => runAlertCheck({ recordEmpty: false }))
-      .catch((err) => console.error('[scheduler] 告警扫描失败:', err.message))
-      .finally(() => { alertSweeping = false; });
-  }
-
   const schedules = getSchedules();
   for (const [key, s] of Object.entries(schedules)) {
     if (running.has(key) || !isDue(s, now)) continue;

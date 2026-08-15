@@ -48,6 +48,15 @@ export const API = {
   // 全局节点排除
   getNodeExclude: () => api.get('/api/settings/node-exclude'),
   saveNodeExclude: (value) => api.put('/api/settings/node-exclude', { value }),
+  // 备份 / 恢复
+  backupUrl: '/api/settings/backup',
+  restoreDb: (file) => fetch('/api/settings/restore', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/octet-stream' }, body: file })
+    .then(async (r) => { const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || '恢复失败'); return d; }),
+  // 套餐
+  plans: () => api.get('/api/plans'),
+  createPlan: (b) => api.post('/api/plans', b),
+  updatePlan: (id, b) => api.put(`/api/plans/${id}`, b),
+  deletePlan: (id) => api.del(`/api/plans/${id}`),
   // groups
   groups: (kind) => api.get(`/api/groups?kind=${kind}`),
   createGroup: (b) => api.post('/api/groups', b),
@@ -58,7 +67,8 @@ export const API = {
   runAirportReset: (airportId) => api.post('/api/automation/airport-reset', airportId ? { airportId } : {}),
   runTrafficStats: () => api.post('/api/automation/traffic-stats', {}),
   runAlerts: () => api.post('/api/automation/alerts', {}),
-  runLatency: (airports) => api.post('/api/automation/latency', { airports: airports || [] }),
+  runLatency: (airports, cleanup) => api.post('/api/automation/latency', { airports: airports || [], cleanup: !!cleanup }),
+  runUserPull: () => api.post('/api/automation/user-pull', {}),
   saveSchedules: (schedules) => api.put('/api/automation/schedule', { schedules }),
   testAirportReset: (airportId) => api.post('/api/automation/test-reset', { airportId }),
   // airports
@@ -87,8 +97,11 @@ export const API = {
   batchToggleUsers: (ids, enabled) => api.post('/api/users/batch/toggle', { ids, enabled }),
   batchGroupUsers: (ids, group_name) => api.post('/api/users/batch/group', { ids, group_name }),
   userSub: (id) => api.get(`/api/users/${id}/sub`),
+  userSubLogs: (id) => api.get(`/api/users/${id}/sub-logs`),
   userPreview: (id) => api.get(`/api/users/${id}/preview`),
   resetUser: (id, b) => api.post(`/api/users/${id}/reset`, b),
+  renewUser: (id, b) => api.post(`/api/users/${id}/renew`, b),
+  userRenewals: (id) => api.get(`/api/users/${id}/renewals`),
   // templates
   templates: () => api.get('/api/templates'),
   createTemplate: (b) => api.post('/api/templates', b),

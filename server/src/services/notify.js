@@ -14,6 +14,8 @@ const DEFAULTS = {
   userAlerts: true,      // 用户到期/超限 告警开关
   airportAlerts: true,   // 机场用量≥99%/即将到期 告警开关
   cooldownHours: 24,     // resend the same alert key at most once per this window
+  fetchFailThreshold: 3, // 机场订阅连续拉取失败达此次数即告警（0=关闭）
+  multiIpThreshold: 3,   // 单用户24h内不同IP数达此值即安全告警（0=关闭）
 };
 
 export function getNotifyConfig() {
@@ -224,6 +226,23 @@ export function buildAirportAlert(airport, reasons, base = panelBaseUrl()) {
   const text = `⚠ 机场「${airport.name}」${reasonText}\n网址：${airport.url || '-'}\n账号：${airport.account || '-'}  密码：${airport.password || '-'}\n用量：${used} / ${total}　到期：${expire}\n` +
     (pull ? `\n拉取更新：${pull}` : '') + (refill ? `\n回填链接：${refill}` : '');
   return { subject, html, text, buttons };
+}
+
+// User's subscription token pulled from an unusual number of distinct IPs in the
+// window → likely shared/leaked. Informational (the fix — resetting the sub — is a
+// panel action), no magic link.
+export function buildUserMultiIpAlert(user, ips, windowHours = 24) {
+  const subject = `⚠ 用户「${user.name}」订阅疑似泄露/多设备（${ips.length} 个 IP）`;
+  const list = ips.slice(0, 20).join('、');
+  const html = `
+    <div style="font-family:sans-serif;max-width:600px">
+      <h2>⚠ 用户「${escapeHtml(user.name)}」订阅疑似泄露/共享</h2>
+      <p>该用户订阅在近 ${windowHours} 小时内被 <b>${ips.length}</b> 个不同 IP 拉取，可能已泄露或多人共享。</p>
+      <div><b>IP：</b>${escapeHtml(list)}${ips.length > 20 ? ' …' : ''}</div>
+      <p class="muted">建议在面板为该用户「重置订阅」以作废旧链接。</p>
+    </div>`;
+  const text = `⚠ 用户「${user.name}」订阅疑似泄露/共享\n近 ${windowHours}h 被 ${ips.length} 个不同 IP 拉取：${list}${ips.length > 20 ? ' …' : ''}\n建议在面板重置该用户订阅。`;
+  return { subject, html, text, buttons: [] };
 }
 
 function escapeHtml(s) {

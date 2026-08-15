@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useMemo } from 'react';
+import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect } from 'react';
 
 /* ---------------- Toast ---------------- */
 const ToastCtx = createContext(null);
@@ -37,6 +37,35 @@ export function Modal({ title, children, onClose, footer, wide }) {
         <div className="modal-body">{children}</div>
         {footer && <div className="modal-foot">{footer}</div>}
       </div>
+    </div>
+  );
+}
+
+/* ---------------- ActionMenu (dropdown) ----------------
+   items: [{ label, onClick, danger?, disabled?, title?, hidden? }] */
+export function ActionMenu({ items = [], label = '操作 ▾' }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+  const visible = items.filter((it) => !it.hidden);
+  return (
+    <div className="action-menu" ref={ref}>
+      <button className="btn sm" onClick={() => setOpen((o) => !o)}>{label}</button>
+      {open && (
+        <div className="action-menu-pop">
+          {visible.map((it, i) => (
+            <button key={i} className={`action-menu-item ${it.danger ? 'danger' : ''}`} disabled={it.disabled}
+              title={it.title || ''} onClick={() => { setOpen(false); it.onClick?.(); }}>
+              {it.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

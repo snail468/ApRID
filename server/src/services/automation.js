@@ -2,7 +2,7 @@ import { db } from '../db.js';
 import { resetAirportSubscription } from './airport/adapters.js';
 import { fetchAirport } from './airport/fetch.js';
 import { fmtBytes } from './util.js';
-import { maybeSendUserAlert, maybeSendAirportAlert } from './alerts.js';
+import { maybeSendUserAlert, maybeSendAirportAlert, maybeSendUserSecurityAlert } from './alerts.js';
 import { pingNodes } from './latency.js';
 
 function createTask(type, refId) {
@@ -175,11 +175,13 @@ export async function runAlertCheck({ recordEmpty = true } = {}) {
   const userIds = db.prepare('SELECT id FROM users WHERE enabled = 1').all().map((r) => r.id);
   const airportIds = db.prepare('SELECT id FROM airports').all().map((r) => r.id);
   const lines = [];
-  let userAlerts = 0, airportAlerts = 0, failed = null;
+  let userAlerts = 0, airportAlerts = 0, secAlerts = 0, failed = null;
   try {
     for (const id of userIds) {
       const r = await maybeSendUserAlert(id);
       if (r.sent) { userAlerts++; lines.push(`用户端告警 #${id}（${r.channels.join('/') || '无渠道成功'}）`); }
+      const s = await maybeSendUserSecurityAlert(id);
+      if (s.sent) { secAlerts++; lines.push(`订阅多IP安全告警 #${id}（${s.ips} 个IP，${s.channels.join('/') || '无渠道成功'}）`); }
     }
     for (const id of airportIds) {
       const r = await maybeSendAirportAlert(id);
@@ -188,8 +190,8 @@ export async function runAlertCheck({ recordEmpty = true } = {}) {
   } catch (err) { failed = err; }
 
   // silent background sweep with nothing to say → don't create a task row
-  if (!recordEmpty && !failed && userAlerts === 0 && airportAlerts === 0) {
-    return { taskId: null, userAlerts, airportAlerts };
+  if (!recordEmpty && !failed && userAlerts === 0 && airportAlerts === 0 && secAlerts === 0) {
+    return { taskId: null, userAlerts, airportAlerts, secAlerts };
   }
 
   const taskId = createTask('alerts', null);
@@ -199,40 +201,122 @@ export async function runAlertCheck({ recordEmpty = true } = {}) {
     finishTask(taskId, 'failed');
     throw Object.assign(failed, { taskId });
   }
-  appendLog(taskId, `完成：用户端告警 ${userAlerts} 条，机场端告警 ${airportAlerts} 条`);
+  appendLog(taskId, `完成：用户端 ${userAlerts} 条，机场端 ${airportAlerts} 条，安全 ${secAlerts} 条`);
   finishTask(taskId, 'success');
-  return { taskId, userAlerts, airportAlerts };
+  return { taskId, userAlerts, airportAlerts, secAlerts };
 }
 
 // "延迟检测" automation. Measures real TCP-handshake RTT for the selected airports'
 // nodes (empty = all nodes) and writes latency/latency_at back. Reuses pingNodes.
-export async function runLatencyCheck(airportIds = []) {
+// With cleanup=true it also deletes nodes that time out (dead nodes); they will
+// re-appear on the airport's next pull if they come back.
+export async function runLatencyCheck(airportIds = [], { cleanup = false } = {}) {
   const taskId = createTask('latency', null);
   try {
     const ids = Array.isArray(airportIds) ? airportIds.map(Number).filter((n) => !Number.isNaN(n)) : [];
     const rows = ids.length
       ? db.prepare(`SELECT id, server, port FROM nodes WHERE airport_id IN (${ids.map(() => '?').join(',')})`).all(...ids)
       : db.prepare('SELECT id, server, port FROM nodes').all();
-    appendLog(taskId, `开始延迟检测：${ids.length ? `机场 [${ids.join(', ')}]` : '全部机场'}，共 ${rows.length} 个节点`);
+    appendLog(taskId, `开始延迟检测：${ids.length ? `机场 [${ids.join(', ')}]` : '全部机场'}，共 ${rows.length} 个节点${cleanup ? '（检测后清理死节点）' : ''}`);
     if (!rows.length) {
       appendLog(taskId, '没有可检测的节点');
       finishTask(taskId, 'success');
-      return { taskId, total: 0, ok: 0, timeout: 0 };
+      return { taskId, total: 0, ok: 0, timeout: 0, deleted: 0 };
     }
     const results = await pingNodes(rows);
     const now = Date.now();
     const upd = db.prepare('UPDATE nodes SET latency = ?, latency_at = ? WHERE id = ?');
     db.transaction((list) => list.forEach((r) => upd.run(r.latency, now, r.id)))(results);
-    const timeout = results.filter((r) => r.latency < 0).length;
-    const ok = results.length - timeout;
-    appendLog(taskId, `完成：连通 ${ok} 个，超时 ${timeout} 个`);
+    const timeouts = results.filter((r) => r.latency < 0);
+    const ok = results.length - timeouts.length;
+    let deleted = 0;
+    if (cleanup && timeouts.length) {
+      const del = db.prepare('DELETE FROM nodes WHERE id = ?');
+      db.transaction((list) => list.forEach((r) => del.run(r.id)))(timeouts);
+      deleted = timeouts.length;
+      appendLog(taskId, `已清理 ${deleted} 个超时(死)节点`);
+    }
+    appendLog(taskId, `完成：连通 ${ok} 个，超时 ${timeouts.length} 个${cleanup ? `，清理 ${deleted} 个` : ''}`);
     finishTask(taskId, 'success');
-    return { taskId, total: results.length, ok, timeout };
+    return { taskId, total: results.length, ok, timeout: timeouts.length, deleted };
   } catch (err) {
     appendLog(taskId, `失败：${err.message}`);
     finishTask(taskId, 'failed');
     throw Object.assign(err, { taskId });
   }
+}
+
+// "用户触发机场拉取" automation. When a downstream user pulls their panel
+// subscription we opportunistically refresh the airport account(s) behind them so
+// usage (B−A) and expiry stay fresh. Throttled to at most one pull per airport per
+// rolling hour (via the airport's own last_fetch_at, which persists across
+// restarts) plus an in-flight guard. Each real pull is task-logged with the
+// triggering user and the airports pulled. `manual` bypasses the 1h window; `seen`
+// dedupes airports across a run-for-all so shared airports pull once.
+const PULL_WINDOW_MS = 3600000;
+const pullInflight = new Set();
+
+export async function runUserPull(userId, { manual = false, seen = null } = {}) {
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  if (!user) return { pulled: 0 };
+  let filter = {};
+  try { filter = JSON.parse(user.node_filter || '{}'); } catch { /* noop */ }
+  const ids = Array.isArray(filter.airports) && filter.airports.length
+    ? filter.airports
+    : db.prepare('SELECT id FROM airports').all().map((r) => r.id);
+  const now = Date.now();
+  const due = [];
+  for (const id of ids) {
+    if (pullInflight.has(id) || seen?.has(id)) continue;
+    const ap = db.prepare('SELECT id, name, account, sub_url, last_fetch_at FROM airports WHERE id = ?').get(id);
+    if (!ap || !ap.sub_url) continue;
+    if (!manual && now - (Number(ap.last_fetch_at) || 0) < PULL_WINDOW_MS) continue; // rolling 1h window
+    due.push(ap);
+    pullInflight.add(id);
+  }
+  // auto trigger with nothing due → no task (avoid a row on every client poll)
+  if (!due.length && !manual) return { pulled: 0 };
+
+  const taskId = createTask('user_pull', userId);
+  try {
+    appendLog(taskId, `用户「${user.name}」拉取订阅 → 触发拉取机场（${manual ? '手动' : '自动 · 滚动1小时节流'}）`);
+    if (!due.length) {
+      appendLog(taskId, '没有需要拉取的机场（无订阅链接，或均已在本次/节流窗口内拉取）');
+      finishTask(taskId, 'success');
+      return { taskId, pulled: 0, total: 0 };
+    }
+    let pulled = 0;
+    for (const ap of due) {
+      const label = ap.account ? `${ap.name} / ${ap.account}` : ap.name;
+      try {
+        const r = await fetchAirport(ap.id);
+        pulled++;
+        seen?.add(ap.id);
+        appendLog(taskId, `机场「${label}」拉取完成，解析 ${r.count} 个节点`);
+      } catch (err) {
+        appendLog(taskId, `机场「${label}」拉取失败：${err.message}`);
+      }
+    }
+    appendLog(taskId, `完成：成功拉取 ${pulled}/${due.length} 个机场`);
+    finishTask(taskId, 'success');
+    return { taskId, pulled, total: due.length };
+  } finally {
+    for (const ap of due) pullInflight.delete(ap.id);
+  }
+}
+
+// Manual "run for all enabled users" — bypasses the 1h window but dedupes shared
+// airports across the whole run so each airport is pulled at most once.
+export async function runUserPullAll() {
+  const users = db.prepare('SELECT id FROM users WHERE enabled = 1').all();
+  const seen = new Set();
+  let tasks = 0, pulled = 0;
+  for (const u of users) {
+    const r = await runUserPull(u.id, { manual: true, seen });
+    if (r.taskId) tasks++;
+    pulled += r.pulled || 0;
+  }
+  return { users: users.length, tasks, pulled };
 }
 
 // Triggered when a user is reset or auto-expires: reset every airport the user pulls from.

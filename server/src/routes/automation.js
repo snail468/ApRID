@@ -1,7 +1,7 @@
 import express from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
-import { runAirportReset, runAllAirportResets, runTrafficStats, runAlertCheck, runLatencyCheck } from '../services/automation.js';
+import { runAirportReset, runAllAirportResets, runTrafficStats, runAlertCheck, runLatencyCheck, runUserPullAll } from '../services/automation.js';
 import { testAirportConnection } from '../services/airport/adapters.js';
 import { getSchedules, setSchedules, describeSchedule } from '../services/scheduler.js';
 
@@ -54,10 +54,21 @@ router.get('/', (req, res) => {
         autoTriggers: [
           '用户流量超限 → 流量统计时就地发送用户端告警（含免登录回填链接）',
           '机场用量≥97% → 拉取机场时就地发送机场端告警（含免登录拉取按钮）',
-          '用户到期 / 用户即将到期(≤1天,提醒续费) / 机场到期≤1天 → 后台每小时自动扫描发送（无需配置）',
+          '用户到期 / 即将到期(≤1天,提醒续费) / 机场到期≤1天 → 按下方 Cron 定时扫描发送',
+        ],
+        schedule: schedules.alerts,
+        scheduleText: describeSchedule(schedules.alerts),
+      },
+      {
+        key: 'user_pull',
+        name: '用户触发机场拉取',
+        last: last('user_pull'),
+        manual: true,
+        autoTriggers: [
+          '用户拉取面板订阅 → 面板拉取其下发机场订阅（每机场滚动1小时最多一次）',
         ],
         schedule: null,
-        scheduleText: '事件即时触发 + 到期类每小时后台自动检查',
+        scheduleText: '由用户拉取订阅事件触发（可手动为全部用户运行一次）',
       },
     ],
     airports,
@@ -124,7 +135,17 @@ router.post('/alerts', async (req, res) => {
 router.post('/latency', async (req, res) => {
   try {
     const airports = Array.isArray(req.body?.airports) ? req.body.airports : [];
-    const r = await runLatencyCheck(airports);
+    const r = await runLatencyCheck(airports, { cleanup: !!req.body?.cleanup });
+    res.json({ ok: true, ...r });
+  } catch (err) {
+    res.status(400).json({ error: err.message, taskId: err.taskId });
+  }
+});
+
+// Run "用户触发机场拉取" manually for all enabled users (bypasses the 1h window).
+router.post('/user-pull', async (req, res) => {
+  try {
+    const r = await runUserPullAll();
     res.json({ ok: true, ...r });
   } catch (err) {
     res.status(400).json({ error: err.message, taskId: err.taskId });

@@ -5,7 +5,7 @@ import { invalidate } from '../store.js';
 
 const TASK_LABEL = {
   airport_reset: '机场订阅重置', traffic_stats: '用户流量统计', alerts: '告警检查',
-  latency: '延迟检测', node_fetch: '节点拉取',
+  latency: '延迟检测', node_fetch: '节点拉取', user_pull: '用户触发拉取',
 };
 const STATUS_BADGE = { success: 'green', failed: 'red', running: 'blue', pending: 'gray' };
 
@@ -14,6 +14,7 @@ const TABS = [
   { key: 'traffic_stats', label: '📊 用户流量统计' },
   { key: 'alerts', label: '🔔 到期/超限告警' },
   { key: 'latency', label: '📡 节点延迟检测' },
+  { key: 'user_pull', label: '📥 用户触发机场拉取' },
 ];
 
 export default function Automation({ toast }) {
@@ -24,12 +25,15 @@ export default function Automation({ toast }) {
   const [testing, setTesting] = useState(null);
   const [testResult, setTestResult] = useState({});
   const [latAirports, setLatAirports] = useState(null); // selected airport ids for latency scope
+  const [latCleanup, setLatCleanup] = useState(null);   // delete dead nodes after检测
   const timer = useRef(null);
 
   const loadTasks = useCallback(() => API.tasks().then(setTasks).catch(() => {}), []);
   const loadOverview = useCallback(() => API.automationOverview().then((o) => {
     setOverview(o);
-    setLatAirports((cur) => cur ?? (o.automations.find((x) => x.key === 'latency')?.schedule?.airports || []));
+    const latSched = o.automations.find((x) => x.key === 'latency')?.schedule;
+    setLatAirports((cur) => cur ?? (latSched?.airports || []));
+    setLatCleanup((cur) => cur ?? !!latSched?.cleanup);
   }).catch((e) => toast.error(e.message)), [toast]);
 
   useEffect(() => { loadOverview(); loadTasks(); }, [loadOverview, loadTasks]);
@@ -71,9 +75,18 @@ export default function Automation({ toast }) {
   const runLatency = async () => {
     setRunning('latency');
     try {
-      const r = await API.runLatency(latAirports || []);
-      toast.success(`延迟检测完成：连通 ${r.ok}，超时 ${r.timeout}（共 ${r.total}）`);
+      const r = await API.runLatency(latAirports || [], !!latCleanup);
+      toast.success(`延迟检测完成：连通 ${r.ok}，超时 ${r.timeout}${latCleanup ? `，清理 ${r.deleted}` : ''}（共 ${r.total}）`);
       invalidate('nodes:');
+    } catch (e) { toast.error(e.message); }
+    finally { setRunning(''); loadTasks(); loadOverview(); }
+  };
+  const runUserPull = async () => {
+    setRunning('user_pull');
+    try {
+      const r = await API.runUserPull();
+      toast.success(`已为 ${r.users} 个用户触发，拉取 ${r.pulled} 个机场`);
+      invalidate('airports'); invalidate('nodes:');
     } catch (e) { toast.error(e.message); }
     finally { setRunning(''); loadTasks(); loadOverview(); }
   };
@@ -181,14 +194,32 @@ export default function Automation({ toast }) {
           </p>
           <TriggerInfo meta={metaOf('alerts')} />
           <p className="muted small" style={{ marginTop: 4 }}>
-            💡 超限/机场用量为<strong>事件即时触发</strong>；到期类由后台<strong>每小时自动检查</strong>，无需配置。下方按钮可随时手动全量检查。
+            💡 超限/机场用量为<strong>事件即时触发</strong>；到期类（用户到期/即将到期、机场到期）由下方 <strong>Cron 定时</strong>扫描发送。
           </p>
+          <CronEditor schedule={metaOf('alerts')?.schedule} onSave={(cfg) => saveSchedule('alerts', cfg)} />
           <div style={{ margin: '12px 0' }}>
             <button className="btn primary" disabled={running === 'alerts'} onClick={runAlerts}>
               {running === 'alerts' ? <span className="spin" /> : '▶ 立即检查并通知'}
             </button>
           </div>
           <TaskLog tasks={tasks} type="alerts" onClear={clearTasks} />
+        </div>
+      )}
+
+      {tab === 'user_pull' && (
+        <div className="card">
+          <h3 style={{ marginTop: 0 }}>📥 用户触发机场拉取</h3>
+          <p className="muted small">
+            用户拉取面板订阅时，面板顺带拉取其下发机场的订阅，刷新用量/到期（每机场滚动 1 小时最多一次）。
+            任务日志记录触发用户与所拉取的机场。下方按钮可手动为<strong>全部启用用户</strong>立即拉取一次（忽略节流、跨用户去重）。
+          </p>
+          <TriggerInfo meta={metaOf('user_pull')} />
+          <div style={{ margin: '12px 0' }}>
+            <button className="btn primary" disabled={running === 'user_pull'} onClick={runUserPull}>
+              {running === 'user_pull' ? <span className="spin" /> : '▶ 为全部用户立即拉取'}
+            </button>
+          </div>
+          <TaskLog tasks={tasks} type="user_pull" onClear={clearTasks} />
         </div>
       )}
 
@@ -216,9 +247,13 @@ export default function Automation({ toast }) {
               })}
             </div>
           </div>
+          <label className="checkbox-inline" style={{ marginBottom: 8 }}>
+            <input type="checkbox" checked={!!latCleanup} onChange={(e) => setLatCleanup(e.target.checked)} />
+            <span>检测后删除超时(死)节点</span>
+          </label>
           <TriggerInfo meta={metaOf('latency')} />
           <CronEditor schedule={metaOf('latency')?.schedule}
-            onSave={(cfg) => saveSchedule('latency', { ...cfg, airports: latAirports || [] })} />
+            onSave={(cfg) => saveSchedule('latency', { ...cfg, airports: latAirports || [], cleanup: !!latCleanup })} />
           <div style={{ margin: '12px 0' }}>
             <button className="btn primary" disabled={running === 'latency'} onClick={runLatency}>
               {running === 'latency' ? <span className="spin" /> : '▶ 立即检测'}

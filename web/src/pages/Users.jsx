@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import QRCode from 'qrcode';
 import { API } from '../api.js';
-import { Modal, useConfirm, copyText, fmtBytes, fmtDate, daysLeft, toDatetimeLocal, fromDatetimeLocal } from '../ui.jsx';
+import { Modal, useConfirm, copyText, fmtBytes, fmtDate, fmtDateTime, daysLeft, toDatetimeLocal, fromDatetimeLocal, ActionMenu } from '../ui.jsx';
 import { useTable, SortTh } from '../hooks/useTable.jsx';
 import { useCachedResource, invalidate } from '../store.js';
 import { GroupSelect, GroupManagerModal, ProtocolPicker } from '../components.jsx';
@@ -20,6 +20,7 @@ export default function Users({ toast }) {
   const [editing, setEditing] = useState(null);
   const [subUser, setSubUser] = useState(null);
   const [previewUser, setPreviewUser] = useState(null);
+  const [renewUser, setRenewUser] = useState(null);
   const [showGroups, setShowGroups] = useState(false);
   const [batchGroup, setBatchGroup] = useState('');
   const [airportFilter, setAirportFilter] = useState('');
@@ -127,6 +128,7 @@ export default function Users({ toast }) {
                   <th className="nosort">状态</th>
                   <SortTh label="到期时间" k="expire_at" table={t} />
                   <th className="nosort">流量</th>
+                  <SortTh label="最后订阅" k="last_sub_at" table={t} />
                   <SortTh label="分组" k="group_name" table={t} />
                   <th className="nosort">备注</th>
                   <th className="nosort">操作</th>
@@ -140,14 +142,18 @@ export default function Users({ toast }) {
                     <td><span className={`badge ${STATUS_BADGE[u.status]}`}>{STATUS_LABEL[u.status]}</span></td>
                     <td>{expireCell(u.expire_at, u.status)}</td>
                     <td><TrafficCell used={u.traffic_used} limit={u.traffic_limit} /></td>
+                    <td className="small muted">{u.last_sub_at ? fmtDateTime(u.last_sub_at) : '从未'}</td>
                     <td>{u.group_name || '-'}</td>
                     <td className="small muted">{u.remark || '-'}</td>
                     <td className="actions">
-                      <button className="btn sm primary" onClick={() => setSubUser(u)}>订阅</button>
-                      <button className="btn sm" onClick={() => setPreviewUser(u)} title="预览客户端可拉取的节点">节点预览</button>
-                      <button className="btn sm" onClick={() => setEditing(u)}>编辑</button>
-                      <button className="btn sm" onClick={() => reset(u)} title="重置订阅">重置</button>
-                      <button className="btn sm danger" onClick={() => del(u.id)}>删</button>
+                      <ActionMenu items={[
+                        { label: '订阅管理', onClick: () => setSubUser(u) },
+                        { label: '续费', title: '延长到期 / 重置本期流量', onClick: () => setRenewUser(u) },
+                        { label: '节点预览', title: '预览客户端可拉取的节点', onClick: () => setPreviewUser(u) },
+                        { label: '编辑', onClick: () => setEditing(u) },
+                        { label: '重置订阅', title: '旧链接失效并触发机场重置', onClick: () => reset(u) },
+                        { label: '删除', danger: true, onClick: () => del(u.id) },
+                      ]} />
                     </td>
                   </tr>
                 ))}
@@ -162,6 +168,7 @@ export default function Users({ toast }) {
             <div className="mrow"><strong>{u.name}</strong><span className={`badge ${STATUS_BADGE[u.status]}`}>{STATUS_LABEL[u.status]}</span></div>
             <div className="mrow"><span className="k">到期</span>{expireCell(u.expire_at, u.status)}</div>
             <div className="mrow"><span className="k">流量</span><TrafficCell used={u.traffic_used} limit={u.traffic_limit} /></div>
+            <div className="mrow"><span className="k">最后订阅</span><span className="small muted">{u.last_sub_at ? fmtDateTime(u.last_sub_at) : '从未'}</span></div>
             <div className="mrow"><span className="k">分组</span><span>{u.group_name || '-'}</span></div>
             <div className="btn-row" style={{ marginTop: 10 }}>
               <button className="btn sm primary" onClick={() => setSubUser(u)}>订阅</button>
@@ -179,6 +186,7 @@ export default function Users({ toast }) {
         onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); refreshGroups(); }} />}
       {subUser && <SubModal user={subUser} toast={toast} onClose={() => setSubUser(null)} />}
       {previewUser && <PreviewModal user={previewUser} toast={toast} onClose={() => setPreviewUser(null)} />}
+      {renewUser && <RenewModal user={renewUser} toast={toast} onClose={() => setRenewUser(null)} onDone={() => { setRenewUser(null); load(); }} />}
       {showGroups && <GroupManagerModal kind="user" title="用户分组管理" toast={toast} onClose={() => setShowGroups(false)} onChanged={() => { refreshGroups(); load(); }} />}
       {confirmNode}
     </>
@@ -214,6 +222,7 @@ function UserModal({ user, templates, airports, groups, toast, assignedByAirport
     expire_at: toDatetimeLocal(user.expire_at), template_id: user.template_id || '',
     group_name: user.group_name || '', remark: user.remark || '',
     traffic_limit_gb: user.traffic_limit ? (user.traffic_limit / GB) : '',
+    price: user.price ?? '',
     airports: uf.airports || [], include: uf.include || '', exclude: uf.exclude || '', prefix: uf.prefix || '',
     protocols: uf.protocols || [], excludeProtocols: uf.excludeProtocols || [],
     maxLatency: uf.maxLatency ?? '',
@@ -239,6 +248,7 @@ function UserModal({ user, templates, airports, groups, toast, assignedByAirport
       name: f.name, enabled: f.enabled, expire_at: fromDatetimeLocal(f.expire_at),
       template_id: f.template_id || null, group_name: f.group_name, remark: f.remark, node_filter,
       traffic_limit: f.traffic_limit_gb ? Math.round(Number(f.traffic_limit_gb) * GB) : null,
+      price: f.price === '' ? null : Number(f.price),
     };
     try {
       if (isNew) await API.createUser(body); else await API.updateUser(user.id, body);
@@ -275,6 +285,9 @@ function UserModal({ user, templates, airports, groups, toast, assignedByAirport
       <div className="field-row">
         <div className="field"><label>流量上限 (GB，留空=不限)</label>
           <input type="number" min="0" step="0.1" value={f.traffic_limit_gb} onChange={(e) => set('traffic_limit_gb', e.target.value)} placeholder="如 100" />
+        </div>
+        <div className="field"><label>收费 (用于收益记账)</label>
+          <input type="number" min="0" step="0.01" value={f.price} onChange={(e) => set('price', e.target.value)} placeholder="如 15" />
         </div>
         <div className="field checkbox-inline" style={{ alignSelf: 'end', marginBottom: 14 }}>
           <input type="checkbox" id="enabled" checked={f.enabled} onChange={(e) => set('enabled', e.target.checked)} />
@@ -384,10 +397,13 @@ function SubModal({ user, toast, onClose }) {
   const [data, setData] = useState(null);
   const [client, setClient] = useState('auto');
   const [qr, setQr] = useState('');
+  const [logs, setLogs] = useState(null);
 
   useEffect(() => { API.userSub(user.id).then(setData).catch((e) => toast.error(e.message)); }, [user.id, toast]);
+  useEffect(() => { API.userSubLogs(user.id).then(setLogs).catch(() => setLogs([])); }, [user.id]);
 
   const currentUrl = data?.links?.[client]?.url || '';
+  const portalUrl = (data?.links?.auto?.url || '').replace('/sub/', '/portal/').split('#')[0];
   useEffect(() => {
     if (!currentUrl) return setQr('');
     QRCode.toDataURL(currentUrl, { width: 220, margin: 1 }).then(setQr).catch(() => setQr(''));
@@ -412,7 +428,13 @@ function SubModal({ user, toast, onClose }) {
                 <input readOnly value={data.links.auto?.url || ''} onClick={(e) => e.target.select()} />
                 <button className="btn sm" onClick={() => copyText(data.links.auto?.url, toast)}>复制</button>
               </div>
+              <div className="sub-link-row">
+                <span className="name">👤 用户自助页</span>
+                <input readOnly value={portalUrl} onClick={(e) => e.target.select()} />
+                <button className="btn sm" onClick={() => copyText(portalUrl, toast)}>复制</button>
+              </div>
             </div>
+            <div className="muted small" style={{ marginTop: 6 }}>把「用户自助页」发给用户，他可免登录查看到期/流量/订阅二维码。</div>
           </div>
           <div className="qr-box">
             <div className="tabs" style={{ justifyContent: 'center' }}>
@@ -424,6 +446,105 @@ function SubModal({ user, toast, onClose }) {
             <div className="muted small" style={{ marginTop: 8 }}>订阅名：{data.name}</div>
             <div className="muted small">扫码导入 · {CLIENTS.find((c) => c.k === client)?.l}</div>
           </div>
+        </div>
+      )}
+
+      <div style={{ marginTop: 18 }}>
+        <h3 style={{ fontSize: 15, margin: '0 0 8px' }}>拉取记录（最近 100 条）</h3>
+        {logs === null ? <div className="muted small"><span className="spin" /></div>
+          : logs.length === 0 ? <div className="muted small">暂无拉取记录</div> : (
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>时间</th><th>客户端IP</th><th>客户端</th><th>设备 / UA</th></tr></thead>
+                <tbody>
+                  {logs.map((l) => (
+                    <tr key={l.id}>
+                      <td className="small muted">{fmtDateTime(l.created_at)}</td>
+                      <td className="small mono">{l.ip || '-'}</td>
+                      <td className="small">{clientLabel(l.target)}</td>
+                      <td className="small muted" style={{ maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.user_agent}>{l.user_agent || '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+      </div>
+    </Modal>
+  );
+}
+
+const CLIENT_LABELS = { clash: 'Clash', singbox: 'sing-box', surge: 'Surge', quantumultx: 'QuantumultX', loon: 'Loon', base64: '通用/Base64', v2rayn: 'v2rayN' };
+function clientLabel(target) { return CLIENT_LABELS[target] || target || '自动'; }
+
+function RenewModal({ user, toast, onClose, onDone }) {
+  const [plans, setPlans] = useState([]);
+  const [renewals, setRenewals] = useState([]);
+  const [mode, setMode] = useState('plan'); // plan | custom
+  const [planId, setPlanId] = useState('');
+  const [custom, setCustom] = useState({ days: 30, trafficGb: '', price: '' });
+  const [resetTraffic, setResetTraffic] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    API.plans().then((p) => { setPlans(p); if (p[0]) setPlanId(String(p[0].id)); }).catch(() => {});
+    API.userRenewals(user.id).then(setRenewals).catch(() => {});
+  }, [user.id]);
+
+  const apply = async () => {
+    const body = mode === 'plan'
+      ? { planId: Number(planId), resetTraffic }
+      : { days: Number(custom.days) || 0, trafficGb: custom.trafficGb === '' ? undefined : Number(custom.trafficGb), price: custom.price === '' ? undefined : Number(custom.price), resetTraffic };
+    if (mode === 'plan' && !planId) return toast.error('请选择套餐');
+    setSaving(true);
+    try {
+      const u = await API.renewUser(user.id, body);
+      toast.success(`续费成功，新到期 ${fmtDate(u.expire_at)}`);
+      onDone();
+    } catch (e) { toast.error(e.message); } finally { setSaving(false); }
+  };
+
+  return (
+    <Modal title={`续费 · ${user.name}`} onClose={onClose}
+      footer={<>
+        <button className="btn" onClick={onClose}>取消</button>
+        <button className="btn primary" onClick={apply} disabled={saving}>{saving ? <span className="spin" /> : '确认续费'}</button>
+      </>}>
+      <div className="muted small" style={{ marginBottom: 8 }}>当前到期：{user.expire_at ? fmtDate(user.expire_at) : '永久'}（未过期则在此基础上叠加）</div>
+      <div className="tabs">
+        <span className={`tab ${mode === 'plan' ? 'active' : ''}`} onClick={() => setMode('plan')}>套餐</span>
+        <span className={`tab ${mode === 'custom' ? 'active' : ''}`} onClick={() => setMode('custom')}>自定义</span>
+      </div>
+      {mode === 'plan' ? (
+        plans.length === 0 ? <div className="muted small">还没有套餐，去「设置 · 套餐管理」添加。</div> : (
+          <div className="field"><label>选择套餐</label>
+            <select value={planId} onChange={(e) => setPlanId(e.target.value)}>
+              {plans.map((p) => <option key={p.id} value={p.id}>{p.name}（{p.days || 0}天 · {p.traffic_gb ? `${p.traffic_gb}GB` : '不限'}{p.price != null ? ` · ¥${p.price}` : ''}）</option>)}
+            </select>
+          </div>
+        )
+      ) : (
+        <div className="field-row">
+          <div className="field"><label>时长(天)</label><input type="number" value={custom.days} onChange={(e) => setCustom((c) => ({ ...c, days: e.target.value }))} /></div>
+          <div className="field"><label>流量(GB,空=不改)</label><input type="number" value={custom.trafficGb} onChange={(e) => setCustom((c) => ({ ...c, trafficGb: e.target.value }))} /></div>
+          <div className="field"><label>价格(空=不改)</label><input type="number" value={custom.price} onChange={(e) => setCustom((c) => ({ ...c, price: e.target.value }))} /></div>
+        </div>
+      )}
+      <label className="checkbox-inline" style={{ marginTop: 8 }}>
+        <input type="checkbox" checked={resetTraffic} onChange={(e) => setResetTraffic(e.target.checked)} />
+        <span>重置本期流量（B−A 重新从 0 计）</span>
+      </label>
+      {renewals.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <div className="small"><strong>续费记录</strong></div>
+          <div className="table-wrap"><table>
+            <thead><tr><th>时间</th><th>套餐</th><th>时长</th><th>价格</th><th>到期变更</th></tr></thead>
+            <tbody>{renewals.map((r) => (
+              <tr key={r.id}><td className="small muted">{fmtDateTime(r.created_at)}</td><td className="small">{r.plan_name}</td>
+                <td className="small">{r.days ? `${r.days}天` : '-'}</td><td className="small">{r.price ?? '-'}</td>
+                <td className="small muted">{r.before_expire ? fmtDate(r.before_expire) : '-'} → {fmtDate(r.after_expire)}</td></tr>
+            ))}</tbody>
+          </table></div>
         </div>
       )}
     </Modal>

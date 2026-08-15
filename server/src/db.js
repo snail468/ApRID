@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS templates (
 
 CREATE TABLE IF NOT EXISTS tasks (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  type        TEXT,        -- airport_reset | node_fetch | latency
+  type        TEXT,        -- airport_reset | node_fetch | latency | traffic_stats | alerts | user_pull
   ref_id      INTEGER,     -- airport_id or user_id
   status      TEXT,        -- pending | running | success | failed
   log         TEXT,
@@ -127,8 +127,38 @@ CREATE TABLE IF NOT EXISTS tasks (
   finished_at INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS sub_logs (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER,
+  ip          TEXT,
+  user_agent  TEXT,
+  target      TEXT,        -- requested/resolved client format
+  created_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS plans (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT NOT NULL,
+  days        INTEGER,     -- validity length added on renewal
+  traffic_gb  INTEGER,     -- per-cycle cap in GB (0/null = unlimited)
+  price       REAL,        -- charge for this plan
+  created_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS renewals (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       INTEGER,
+  plan_name     TEXT,
+  days          INTEGER,
+  price         REAL,
+  before_expire INTEGER,
+  after_expire  INTEGER,
+  created_at    INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_nodes_airport ON nodes(airport_id);
 CREATE INDEX IF NOT EXISTS idx_users_token   ON users(token);
+CREATE INDEX IF NOT EXISTS idx_sub_logs_user ON sub_logs(user_id, id);
 `);
 
 // ---- lightweight migrations: add columns that may be missing on older DBs ----
@@ -147,11 +177,17 @@ ensureColumns('airports', {
   // alert dedup state for the 到期/超限告警 automation.
   used_traffic_cum: 'INTEGER', used_traffic_last: 'INTEGER',
   alert_key: 'TEXT', alert_at: 'INTEGER',
+  // consecutive subscription-pull failures (reset to 0 on success) + last success
+  // time, powering the 拉取连续失败 alert; cost for 成本/收益记账.
+  fetch_fail_count: 'INTEGER', last_fetch_ok: 'INTEGER', cost: 'REAL',
 });
 ensureColumns('users', {
   traffic_base: 'INTEGER', traffic_used: 'INTEGER',
   traffic_limit: 'INTEGER', traffic_updated_at: 'INTEGER',
   alert_key: 'TEXT', alert_at: 'INTEGER',
+  last_sub_at: 'INTEGER', // last time the user pulled their panel subscription
+  sec_alert_at: 'INTEGER', // last security (multi-IP) alert time, for dedup
+  price: 'REAL',           // charge for this user, for 成本/收益记账
 });
 
 // Seed the cumulative-traffic baseline on existing rows so the monotonic counter

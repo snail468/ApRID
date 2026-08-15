@@ -176,6 +176,19 @@ tr.row-active   { box-shadow: inset 3px 0 0 transparent; }
 .tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
 .tabs .tab { padding: 6px 12px; border-radius: 8px; cursor: pointer; border: 1px solid var(--border); font-size: 12px; }
 .tabs .tab.active { background: var(--accent-dim); border-color: var(--accent); color: #fff; }
+.action-menu { position: relative; display: inline-block; }
+.action-menu-pop {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 30;
+  background: var(--card, #181b21); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.35); padding: 4px; min-width: 132px; display: flex; flex-direction: column;
+}
+.action-menu-item {
+  text-align: left; background: transparent; border: 0; color: var(--text, inherit);
+  padding: 8px 12px; border-radius: 7px; font-size: 13px; cursor: pointer; white-space: nowrap;
+}
+.action-menu-item:hover { background: var(--accent-dim); }
+.action-menu-item.danger { color: var(--danger, #f87171); }
+.action-menu-item:disabled { opacity: .5; cursor: default; }
 .empty { text-align: center; padding: 40px; color: var(--text-dim); }
 .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--text-dim); border-top-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }

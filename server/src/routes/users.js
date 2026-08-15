@@ -10,7 +10,7 @@ import { runUserTriggeredReset } from '../services/automation.js';
 const router = express.Router();
 router.use(requireAuth);
 
-const FIELDS = ['name', 'enabled', 'expire_at', 'template_id', 'group_name', 'remark', 'node_filter', 'traffic_limit'];
+const FIELDS = ['name', 'enabled', 'expire_at', 'template_id', 'group_name', 'remark', 'node_filter', 'traffic_limit', 'price'];
 
 function normalize(body) {
   const out = {};
@@ -53,6 +53,14 @@ router.get('/:id/sub', (req, res) => {
   }
   links.auto = { name: '自动 (按客户端)', url: `${base}/sub/${u.token}${frag}` };
   res.json({ token: u.token, name: u.name, links });
+});
+
+// Subscription pull history for this user (client IP / device UA / format).
+router.get('/:id/sub-logs', (req, res) => {
+  const rows = db.prepare(
+    'SELECT id, ip, user_agent, target, created_at FROM sub_logs WHERE user_id = ? ORDER BY id DESC LIMIT 100'
+  ).all(req.params.id);
+  res.json(rows);
 });
 
 // Node preview: the exact nodes this user's client would pull after all
@@ -124,6 +132,44 @@ router.post('/batch/toggle', (req, res) => {
   const now = Date.now();
   db.transaction((list) => list.forEach((id) => upd.run(enabled ? 1 : 0, now, id)))(ids);
   res.json({ ok: true });
+});
+
+// One-click renewal: extend expiry, optionally set traffic cap/price from a plan,
+// reset the traffic baseline (so B−A restarts this cycle), re-enable, clear alert
+// dedup, and record a renewal history row.
+router.post('/:id/renew', (req, res) => {
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!u) return res.status(404).json({ error: '用户不存在' });
+  const { planId, days, trafficGb, price, resetTraffic = true } = req.body || {};
+  let plan = null;
+  if (planId) plan = db.prepare('SELECT * FROM plans WHERE id = ?').get(planId);
+
+  const now = Date.now();
+  const addDays = Number(days ?? plan?.days ?? 0) || 0;
+  const before = u.expire_at || now;
+  // stack onto the current expiry when the user hasn't lapsed yet
+  const base = Math.max(now, Number(u.expire_at) || now);
+  const after = addDays > 0 ? base + addDays * 86400000 : before;
+
+  const gb = trafficGb ?? plan?.traffic_gb;
+  const newLimit = gb != null && gb !== '' ? Math.round(Number(gb) * 1024 * 1024 * 1024) : u.traffic_limit;
+  const newPrice = price ?? plan?.price ?? u.price;
+
+  const sets = ['expire_at = ?', 'enabled = 1', 'traffic_limit = ?', 'price = ?',
+    'alert_key = NULL', 'alert_at = NULL', 'updated_at = ?'];
+  const args = [after, newLimit, newPrice, now];
+  if (resetTraffic) { sets.push('traffic_base = NULL', 'traffic_used = 0', 'traffic_updated_at = ?'); args.push(now); }
+  db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...args, u.id);
+
+  db.prepare('INSERT INTO renewals (user_id, plan_name, days, price, before_expire, after_expire, created_at) VALUES (?,?,?,?,?,?,?)')
+    .run(u.id, plan?.name || (addDays ? `${addDays}天` : '手动'), addDays, newPrice ?? null, u.expire_at || null, after, now);
+
+  res.json(decorate(db.prepare('SELECT * FROM users WHERE id = ?').get(u.id)));
+});
+
+// Renewal history for this user.
+router.get('/:id/renewals', (req, res) => {
+  res.json(db.prepare('SELECT * FROM renewals WHERE user_id = ? ORDER BY id DESC LIMIT 50').all(req.params.id));
 });
 
 // Reset subscription: new token invalidates old link, then trigger airport reset automation.

@@ -1,6 +1,6 @@
 import { db } from '../db.js';
 import { userStatus } from './subscription/build.js';
-import { notify, buildUserAlert, buildAirportAlert, getNotifyConfig } from './notify.js';
+import { notify, buildUserAlert, buildAirportAlert, buildUserMultiIpAlert, getNotifyConfig } from './notify.js';
 
 // Alert evaluation + de-duplication + sending, kept in its own module so both the
 // event hooks (fetch.js after a pull, automation.js after traffic stats) and the
@@ -36,8 +36,8 @@ export function evalUserReason(u, now = Date.now()) {
   return null;
 }
 
-// airport condition -> { reasons:[], key:'traffic|expire' } (key '' = no alert)
-export function evalAirport(ap, now = Date.now()) {
+// airport condition -> { reasons:[], key:'traffic|expire|fetch' } (key '' = no alert)
+export function evalAirport(ap, now = Date.now(), { fetchFailThreshold = 3 } = {}) {
   const reasons = [], keyParts = [];
   const total = Number(ap.total_traffic || 0);
   const used = Number(ap.used_traffic || 0);
@@ -48,6 +48,11 @@ export function evalAirport(ap, now = Date.now()) {
   if (ap.expire_at && ap.expire_at - now <= DAY_MS) {
     reasons.push(ap.expire_at < now ? '已到期' : '即将到期(≤1天)');
     keyParts.push('expire');
+  }
+  const fails = Number(ap.fetch_fail_count || 0);
+  if (fetchFailThreshold > 0 && fails >= fetchFailThreshold) {
+    reasons.push(`订阅连续拉取失败 ${fails} 次`);
+    keyParts.push('fetch'); // key stays stable across further failures (no count)
   }
   return { reasons, key: keyParts.join('|') };
 }
@@ -89,7 +94,7 @@ export async function maybeSendAirportAlert(airportId) {
   const ap = db.prepare('SELECT * FROM airports WHERE id = ?').get(airportId);
   if (!ap) return { sent: false };
   const now = Date.now();
-  const { reasons, key } = evalAirport(ap, now);
+  const { reasons, key } = evalAirport(ap, now, { fetchFailThreshold: Number(cfg.fetchFailThreshold ?? 3) });
   if (!key) {
     if (ap.alert_key) db.prepare('UPDATE airports SET alert_key = NULL, alert_at = NULL WHERE id = ?').run(ap.id);
     return { sent: false };
@@ -99,4 +104,27 @@ export async function maybeSendAirportAlert(airportId) {
   const results = await notify(buildAirportAlert(ap, reasons));
   db.prepare('UPDATE airports SET alert_key = ?, alert_at = ? WHERE id = ?').run(key, now, ap.id);
   return { sent: true, reasons, channels: results.filter((r) => r.ok).map((r) => r.channel) };
+}
+
+// Security: a user's subscription token pulled from too many distinct IPs within
+// the window → likely leaked/shared. Deduped by sec_alert_at + cooldown.
+const MULTI_IP_WINDOW_MS = 24 * 3600000;
+export async function maybeSendUserSecurityAlert(userId) {
+  const cfg = getNotifyConfig();
+  const threshold = Number(cfg.multiIpThreshold ?? 3);
+  if (threshold <= 0 || !(cfg.email.enabled || cfg.telegram.enabled)) return { sent: false };
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  if (!u || !u.enabled) return { sent: false };
+  const now = Date.now();
+  const rows = db.prepare(
+    "SELECT DISTINCT ip FROM sub_logs WHERE user_id = ? AND created_at >= ? AND ip IS NOT NULL AND ip != ''"
+  ).all(userId, now - MULTI_IP_WINDOW_MS);
+  const ips = rows.map((r) => r.ip);
+  if (ips.length < threshold) return { sent: false };
+  const cd = cooldownMs();
+  if (u.sec_alert_at && cd > 0 && now - u.sec_alert_at < cd) return { sent: false };
+
+  const results = await notify(buildUserMultiIpAlert(u, ips, 24));
+  db.prepare('UPDATE users SET sec_alert_at = ? WHERE id = ?').run(now, u.id);
+  return { sent: true, ips: ips.length, channels: results.filter((r) => r.ok).map((r) => r.channel) };
 }

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { API } from '../api.js';
-import { Modal, useConfirm, copyText, fmtBytes, fmtDate, daysLeft, toDatetimeLocal, fromDatetimeLocal } from '../ui.jsx';
+import { Modal, useConfirm, copyText, fmtBytes, fmtDate, fmtDateTime, daysLeft, toDatetimeLocal, fromDatetimeLocal, ActionMenu } from '../ui.jsx';
 import { useTable, SortTh } from '../hooks/useTable.jsx';
 import { useCachedResource, invalidate } from '../store.js';
 import { GroupSelect, GroupManagerModal, UAField, HeadersEditor, ProxyBuilder, NodeProcessingEditor } from '../components.jsx';
@@ -105,6 +105,7 @@ export default function Airports({ toast }) {
                   <SortTh label="节点" k="node_count" table={t} />
                   <SortTh label="到期" k="expire_at" table={t} />
                   <th className="nosort">用量</th>
+                  <SortTh label="最后拉取" k="last_fetch_at" table={t} />
                   <SortTh label="分组" k="group_name" table={t} />
                   <th className="nosort">操作</th>
                 </tr>
@@ -125,13 +126,16 @@ export default function Airports({ toast }) {
                     <td>{a.node_count}</td>
                     <td>{expireCell(a.expire_at)}</td>
                     <td><UsageCell used={a.used_traffic} total={a.total_traffic} /></td>
+                    <td className="small muted">{a.last_fetch_at ? fmtDateTime(a.last_fetch_at) : '从未'}</td>
                     <td>{a.group_name || '-'}</td>
                     <td className="actions">
-                      <button className="btn sm" disabled={busy[a.id]} onClick={() => doFetch(a.id)}>{busy[a.id] === 'fetch' ? <span className="spin" /> : '拉取'}</button>
-                      <button className="btn sm" disabled={busy[a.id]} onClick={() => doReset(a.id)} title="自动重置订阅">{busy[a.id] === 'reset' ? <span className="spin" /> : '重置'}</button>
-                      <button className="btn sm" onClick={() => setManual(a)} title="半自动：自己登录机场重置后粘贴新链接">手动重置</button>
-                      <button className="btn sm" onClick={() => setEditing(a)}>编辑</button>
-                      <button className="btn sm danger" onClick={() => doDelete(a.id)}>删</button>
+                      <ActionMenu label={busy[a.id] ? <span className="spin" /> : '操作 ▾'} items={[
+                        { label: '拉取订阅', disabled: !!busy[a.id], onClick: () => doFetch(a.id) },
+                        { label: '自动重置', disabled: !!busy[a.id], title: '后台自动登录重置', onClick: () => doReset(a.id) },
+                        { label: '手动重置', title: '自己登录机场重置后粘贴新链接', onClick: () => setManual(a) },
+                        { label: '编辑', onClick: () => setEditing(a) },
+                        { label: '删除', danger: true, onClick: () => doDelete(a.id) },
+                      ]} />
                     </td>
                   </tr>
                 ))}
@@ -149,6 +153,7 @@ export default function Airports({ toast }) {
             <div className="mrow"><span className="k">节点</span><span>{a.node_count}</span></div>
             <div className="mrow"><span className="k">到期</span>{expireCell(a.expire_at)}</div>
             <div className="mrow"><span className="k">用量</span><UsageCell used={a.used_traffic} total={a.total_traffic} /></div>
+            <div className="mrow"><span className="k">最后拉取</span><span className="small muted">{a.last_fetch_at ? fmtDateTime(a.last_fetch_at) : '从未'}</span></div>
             <div className="btn-row" style={{ marginTop: 10 }}>
               <button className="btn sm" onClick={() => doFetch(a.id)}>拉取</button>
               <button className="btn sm" onClick={() => doReset(a.id)}>重置</button>
@@ -207,6 +212,7 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
     request_headers: safeParse(airport.request_headers),
     node_filter: safeParse(airport.node_filter),
     expire_at: toDatetimeLocal(airport.expire_at),
+    cost: airport.cost ?? '',
   });
   const [saving, setSaving] = useState(false);
   const [detecting, setDetecting] = useState(false);
@@ -231,6 +237,7 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
       request_headers: JSON.stringify(f.request_headers || {}),
       node_filter: JSON.stringify(f.node_filter || {}),
       expire_at: fromDatetimeLocal(f.expire_at),
+      cost: f.cost === '' ? null : Number(f.cost),
     };
     try {
       if (isNew) await API.createAirport(body);
@@ -320,7 +327,10 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
       <div className="section-label">节点处理</div>
       <NodeProcessingEditor value={f.node_filter} onChange={(v) => set('node_filter', v)} />
 
-      <div className="field" style={{ marginTop: 14 }}><label>备注</label><input value={f.remark} onChange={(e) => set('remark', e.target.value)} /></div>
+      <div className="field-row" style={{ marginTop: 14 }}>
+        <div className="field"><label>备注</label><input value={f.remark} onChange={(e) => set('remark', e.target.value)} /></div>
+        <div className="field"><label>成本 (用于收益记账)</label><input type="number" min="0" step="0.01" value={f.cost} onChange={(e) => set('cost', e.target.value)} placeholder="如 30" /></div>
+      </div>
     </Modal>
   );
 }

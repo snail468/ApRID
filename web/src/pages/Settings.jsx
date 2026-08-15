@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { API } from '../api.js';
-import { fmtDate } from '../ui.jsx';
+import { fmtDate, useConfirm } from '../ui.jsx';
 
 export default function Settings({ toast, onAccountChange }) {
   const [settings, setSettings] = useState(null);
@@ -13,8 +13,10 @@ export default function Settings({ toast, onAccountChange }) {
       <div className="page-head"><h1>设置</h1></div>
       <div style={{ display: 'grid', gap: 20, maxWidth: 720 }}>
         <AccountCard settings={settings} toast={toast} onChanged={onAccountChange} />
+        <PlansCard toast={toast} />
         <NotifyCard toast={toast} />
         <NodeExcludeCard toast={toast} />
+        <BackupCard toast={toast} />
         <TwoFACard settings={settings} toast={toast} reload={load} />
         <DevicesCard toast={toast} />
       </div>
@@ -94,6 +96,10 @@ function NotifyCard({ toast }) {
         <label className="checkbox-inline"><input type="checkbox" checked={!!cfg.airportAlerts} onChange={(e) => setTop('airportAlerts', e.target.checked)} /><span>机场端告警</span></label>
         <div className="field"><label>同类告警冷却(小时)</label><input type="number" min="0" value={cfg.cooldownHours ?? 24} onChange={(e) => setTop('cooldownHours', Number(e.target.value))} /></div>
       </div>
+      <div className="field-row">
+        <div className="field"><label>机场连续拉取失败告警阈值(次,0关)</label><input type="number" min="0" value={cfg.fetchFailThreshold ?? 3} onChange={(e) => setTop('fetchFailThreshold', Number(e.target.value))} /></div>
+        <div className="field"><label>订阅多IP安全告警阈值(24h内IP数,0关)</label><input type="number" min="0" value={cfg.multiIpThreshold ?? 3} onChange={(e) => setTop('multiIpThreshold', Number(e.target.value))} /></div>
+      </div>
 
       <h4 style={{ margin: '14px 0 6px' }}>
         <label className="checkbox-inline"><input type="checkbox" checked={!!cfg.email.enabled} onChange={(e) => setEmail('enabled', e.target.checked)} /><span>邮件 (SMTP)</span></label>
@@ -167,6 +173,81 @@ function NodeExcludeCard({ toast }) {
         <button className="btn primary" onClick={save} disabled={saving}>{saving ? <span className="spin" /> : '保存'}</button>
         <button className="btn" onClick={() => setValue(def)} title="恢复内置默认排除词">恢复默认</button>
       </div>
+    </div>
+  );
+}
+
+function PlansCard({ toast }) {
+  const [plans, setPlans] = useState(null);
+  const [form, setForm] = useState({ name: '', days: 30, traffic_gb: '', price: '' });
+  const load = useCallback(() => API.plans().then(setPlans).catch((e) => toast.error(e.message)), [toast]);
+  useEffect(() => { load(); }, [load]);
+
+  const add = async () => {
+    if (!form.name.trim()) return toast.error('套餐名必填');
+    try { await API.createPlan(form); setForm({ name: '', days: 30, traffic_gb: '', price: '' }); load(); toast.success('已添加套餐'); }
+    catch (e) { toast.error(e.message); }
+  };
+  const del = async (id) => { try { await API.deletePlan(id); load(); } catch (e) { toast.error(e.message); } };
+
+  if (!plans) return <div className="card"><h3 style={{ marginTop: 0 }}>🎫 套餐管理</h3><div className="muted small"><span className="spin" /></div></div>;
+  return (
+    <div className="card">
+      <h3 style={{ marginTop: 0 }}>🎫 套餐管理</h3>
+      <p className="muted small">套餐 = 时长(天) + 流量(GB，空/0=不限) + 价格。用户「续费」时可一键套用（延长到期、重置本期流量）。</p>
+      {plans.length > 0 && (
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>名称</th><th>时长</th><th>流量</th><th>价格</th><th></th></tr></thead>
+            <tbody>
+              {plans.map((p) => (
+                <tr key={p.id}>
+                  <td>{p.name}</td><td>{p.days ? `${p.days}天` : '-'}</td>
+                  <td>{p.traffic_gb ? `${p.traffic_gb}GB` : '不限'}</td><td>{p.price ?? '-'}</td>
+                  <td><button className="btn sm danger" onClick={() => del(p.id)}>删</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="field-row" style={{ marginTop: 10 }}>
+        <div className="field"><label>名称</label><input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} /></div>
+        <div className="field"><label>时长(天)</label><input type="number" value={form.days} onChange={(e) => setForm((f) => ({ ...f, days: e.target.value }))} /></div>
+        <div className="field"><label>流量(GB)</label><input type="number" value={form.traffic_gb} placeholder="空=不限" onChange={(e) => setForm((f) => ({ ...f, traffic_gb: e.target.value }))} /></div>
+        <div className="field"><label>价格</label><input type="number" value={form.price} onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))} /></div>
+      </div>
+      <button className="btn" onClick={add}>+ 添加套餐</button>
+    </div>
+  );
+}
+
+function BackupCard({ toast }) {
+  const fileRef = useRef(null);
+  const [restoring, setRestoring] = useState(false);
+  const [confirm, confirmNode] = useConfirm();
+
+  const doRestore = async (file) => {
+    if (!file) return;
+    if (!(await confirm(`用「${file.name}」覆盖当前数据库？此操作不可撤销，恢复后服务会自动重启。`))) {
+      if (fileRef.current) fileRef.current.value = ''; return;
+    }
+    setRestoring(true);
+    try { await API.restoreDb(file); toast.success('已恢复，服务正在重启，请稍候刷新页面'); }
+    catch (e) { toast.error(e.message); }
+    finally { setRestoring(false); if (fileRef.current) fileRef.current.value = ''; }
+  };
+
+  return (
+    <div className="card">
+      <h3 style={{ marginTop: 0 }}>💾 数据库备份 / 恢复</h3>
+      <p className="muted small">备份导出完整数据库快照（机场/用户/模板/设置全部在内）；恢复会<strong>覆盖当前数据并重启服务</strong>。建议定期下载备份。</p>
+      <div className="btn-row">
+        <a className="btn primary" href={API.backupUrl} download>下载备份</a>
+        <button className="btn" disabled={restoring} onClick={() => fileRef.current?.click()}>{restoring ? <span className="spin" /> : '上传恢复'}</button>
+        <input ref={fileRef} type="file" accept=".db" style={{ display: 'none' }} onChange={(e) => doRestore(e.target.files[0])} />
+      </div>
+      {confirmNode}
     </div>
   );
 }
