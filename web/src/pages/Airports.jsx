@@ -212,7 +212,8 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
     request_headers: safeParse(airport.request_headers),
     node_filter: safeParse(airport.node_filter),
     expire_at: toDatetimeLocal(airport.expire_at),
-    cost: airport.cost ?? '',
+    cost_amount: airport.cost_amount ?? '',
+    cost_cycle_days: airport.cost_cycle_days || 30,
   });
   const [saving, setSaving] = useState(false);
   const [detecting, setDetecting] = useState(false);
@@ -232,12 +233,17 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
   const save = async () => {
     if (!f.name.trim()) return toast.error('机场名称必填');
     setSaving(true);
+    const amount = f.cost_amount === '' ? null : Number(f.cost_amount);
+    const cycle = Number(f.cost_cycle_days) || 30;
     const body = {
       ...f,
       request_headers: JSON.stringify(f.request_headers || {}),
       node_filter: JSON.stringify(f.node_filter || {}),
       expire_at: fromDatetimeLocal(f.expire_at),
-      cost: f.cost === '' ? null : Number(f.cost),
+      cost_amount: amount,
+      cost_cycle_days: cycle,
+      // normalized 每月成本 used by 收益记账
+      cost: amount == null ? null : Math.round((amount / cycle) * 30 * 100) / 100,
     };
     try {
       if (isNew) await API.createAirport(body);
@@ -327,9 +333,20 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
       <div className="section-label">节点处理</div>
       <NodeProcessingEditor value={f.node_filter} onChange={(v) => set('node_filter', v)} />
 
+      <div className="field" style={{ marginTop: 14 }}><label>备注</label><input value={f.remark} onChange={(e) => set('remark', e.target.value)} /></div>
       <div className="field-row" style={{ marginTop: 14 }}>
-        <div className="field"><label>备注</label><input value={f.remark} onChange={(e) => set('remark', e.target.value)} /></div>
-        <div className="field"><label>成本 (用于收益记账)</label><input type="number" min="0" step="0.01" value={f.cost} onChange={(e) => set('cost', e.target.value)} placeholder="如 30" /></div>
+        <div className="field"><label>成本金额 (按套餐付费)</label><input type="number" min="0" step="0.01" value={f.cost_amount} onChange={(e) => set('cost_amount', e.target.value)} placeholder="如 90" /></div>
+        <div className="field"><label>计费周期</label>
+          <select value={f.cost_cycle_days} onChange={(e) => set('cost_cycle_days', Number(e.target.value))}>
+            <option value={30}>月付 (30天)</option>
+            <option value={90}>季付 (90天)</option>
+            <option value={180}>半年 (180天)</option>
+            <option value={365}>年付 (365天)</option>
+          </select>
+        </div>
+        <div className="field"><label>≈ 每月成本</label>
+          <input readOnly value={f.cost_amount === '' ? '-' : `¥${(Number(f.cost_amount) / (Number(f.cost_cycle_days) || 30) * 30).toFixed(2)}`} />
+        </div>
       </div>
     </Modal>
   );

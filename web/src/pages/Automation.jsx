@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { API } from '../api.js';
 import { fmtDate, fmtDateTime } from '../ui.jsx';
 import { invalidate } from '../store.js';
@@ -18,7 +19,10 @@ const TABS = [
 ];
 
 export default function Automation({ toast }) {
-  const [tab, setTab] = useState('airport_reset');
+  // keep the active tab in the URL (?tab=) so a page refresh stays on it
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = TABS.some((t) => t.key === searchParams.get('tab')) ? searchParams.get('tab') : 'airport_reset';
+  const setTab = (key) => setSearchParams({ tab: key });
   const [overview, setOverview] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [running, setRunning] = useState('');

@@ -27,9 +27,9 @@ export default function Dashboard() {
 
       {/* 成本 / 收益记账 */}
       <div className="stat-grid" style={{ marginTop: 16 }}>
-        <Stat n={`¥${(acc.totalRevenue || 0).toFixed(2)}`} l="收益(启用用户收费)" color="var(--green)" />
-        <Stat n={`¥${(acc.totalCost || 0).toFixed(2)}`} l="成本(机场合计)" color="var(--yellow)" />
-        <Stat n={`¥${(acc.profit || 0).toFixed(2)}`} l="毛利" color={acc.profit >= 0 ? 'var(--green)' : 'var(--red)'} />
+        <Stat n={`¥${(acc.totalRevenue || 0).toFixed(2)}`} l="月收益(启用用户收费)" color="var(--green)" />
+        <Stat n={`¥${(acc.totalCost || 0).toFixed(2)}`} l="月成本(机场合计)" color="var(--yellow)" />
+        <Stat n={`¥${(acc.profit || 0).toFixed(2)}`} l="月毛利" color={acc.profit >= 0 ? 'var(--green)' : 'var(--red)'} />
       </div>
 
       {/* 机场集中看板 */}

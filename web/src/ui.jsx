@@ -42,22 +42,42 @@ export function Modal({ title, children, onClose, footer, wide }) {
 }
 
 /* ---------------- ActionMenu (dropdown) ----------------
-   items: [{ label, onClick, danger?, disabled?, title?, hidden? }] */
+   items: [{ label, onClick, danger?, disabled?, title?, hidden? }]
+   The popover is position:fixed (positioned from the button's rect) so it is never
+   clipped by the table's overflow:auto container. */
 export function ActionMenu({ items = [], label = '操作 ▾' }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef(null);
+  const [pos, setPos] = useState(null);
+  const btnRef = useRef(null);
+  const popRef = useRef(null);
+
   useEffect(() => {
     if (!open) return;
-    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const place = () => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (r) setPos({ top: r.bottom + 4, right: Math.max(8, window.innerWidth - r.right) });
+    };
+    place();
+    const onDoc = (e) => {
+      if (!popRef.current?.contains(e.target) && !btnRef.current?.contains(e.target)) setOpen(false);
+    };
+    const close = () => setOpen(false);
     document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
   }, [open]);
+
   const visible = items.filter((it) => !it.hidden);
   return (
-    <div className="action-menu" ref={ref}>
-      <button className="btn sm" onClick={() => setOpen((o) => !o)}>{label}</button>
-      {open && (
-        <div className="action-menu-pop">
+    <div className="action-menu">
+      <button ref={btnRef} className="btn sm" onClick={() => setOpen((o) => !o)}>{label}</button>
+      {open && pos && (
+        <div ref={popRef} className="action-menu-pop" style={{ position: 'fixed', top: pos.top, right: pos.right }}>
           {visible.map((it, i) => (
             <button key={i} className={`action-menu-item ${it.danger ? 'danger' : ''}`} disabled={it.disabled}
               title={it.title || ''} onClick={() => { setOpen(false); it.onClick?.(); }}>

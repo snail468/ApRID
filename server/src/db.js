@@ -178,9 +178,18 @@ ensureColumns('airports', {
   used_traffic_cum: 'INTEGER', used_traffic_last: 'INTEGER',
   alert_key: 'TEXT', alert_at: 'INTEGER',
   // consecutive subscription-pull failures (reset to 0 on success) + last success
-  // time, powering the 拉取连续失败 alert; cost for 成本/收益记账.
-  fetch_fail_count: 'INTEGER', last_fetch_ok: 'INTEGER', cost: 'REAL',
+  // time, powering the 拉取连续失败 alert; cost for 成本/收益记账. cost is the
+  // normalized 每月成本 (元/月); cost_amount/cost_cycle_days keep the raw
+  // "付了多少钱 / 多少天一个周期" input so it can be re-edited.
+  fetch_fail_count: 'INTEGER', last_fetch_ok: 'INTEGER',
+  cost: 'REAL', cost_amount: 'REAL', cost_cycle_days: 'INTEGER',
 });
+
+// Backfill raw cost input for rows that only had the old monthly `cost` value.
+db.exec(`
+  UPDATE airports SET cost_amount = cost, cost_cycle_days = 30
+   WHERE cost IS NOT NULL AND cost_amount IS NULL
+`);
 ensureColumns('users', {
   traffic_base: 'INTEGER', traffic_used: 'INTEGER',
   traffic_limit: 'INTEGER', traffic_updated_at: 'INTEGER',
