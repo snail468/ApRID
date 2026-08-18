@@ -1,12 +1,13 @@
 // Self-contained logic tests (no DB / no network) — run in CI via `npm test`.
 import { parseSubscription, parseUri, parseUserInfo } from '../src/services/nodeParser.js';
-import { processAirportNodes, filterNodes } from '../src/services/nodeProcess.js';
+import { processAirportNodes, filterNodes, nodeHealthScore, orderByHealth, previewFilter } from '../src/services/nodeProcess.js';
 import { toBase64, toClash, toSingbox, toSurge, toQuanX, toLoon, detectFormat } from '../src/services/subscription/converters.js';
 import { DEFAULT_TEMPLATES } from '../src/services/subscription/defaultTemplates.js';
 import { accumulateUsed } from '../src/services/util.js';
 import { signAction, verifyAction } from '../src/services/actionToken.js';
 import { cronMatch, isValidCron, describeCron } from '../src/services/cron.js';
 import { combineExclude, DEFAULT_GLOBAL_EXCLUDE } from '../src/services/nodeProcess.js';
+import { describeAction, sanitizeBody } from '../src/services/auditFormat.js';
 import { load as yamlLoad } from 'js-yaml';
 
 let pass = 0, fail = 0;
@@ -208,6 +209,73 @@ ok(quanRendered.includes('[filter_remote]') && !quanRendered.includes('<PROXY_NA
   const kept = filterNodes(nodes, { exclude: DEFAULT_GLOBAL_EXCLUDE }).map((n) => n.name);
   ok(kept.length === 1 && kept[0] === '香港01', `filterNodes global exclude -> ${kept.join(',')}`);
   ok(combineExclude('', null, 'a') === '(?:a)' && combineExclude() === '', 'combineExclude skips empties');
+}
+
+// --- node health scoring + good-node-first ordering ---
+{
+  const stats = new Map([
+    ['1.1.1.1:443', { total: 10, ok: 10, uptime: 1, avgLatency: 55 }],   // fast + reliable
+    ['3.3.3.3:443', { total: 10, ok: 10, uptime: 1, avgLatency: 850 }],  // reliable but slow
+    ['2.2.2.2:443', { total: 10, ok: 0, uptime: 0, avgLatency: null }],  // always times out
+  ]);
+  const good = { server: '1.1.1.1', port: 443 };
+  const slow = { server: '3.3.3.3', port: 443 };
+  const dead = { server: '2.2.2.2', port: 443 };
+  const untested = { server: '9.9.9.9', port: 443, latency: null };      // no history, no live
+  ok(nodeHealthScore(good, stats) > nodeHealthScore(slow, stats), 'health: fast > slow');
+  ok(nodeHealthScore(slow, stats) > nodeHealthScore(untested, stats), 'health: reliable-slow > untested');
+  ok(nodeHealthScore(untested, stats) > nodeHealthScore(dead, stats), 'health: untested > dead');
+  ok(nodeHealthScore(untested, stats) === 0, 'health: untested scores neutral 0');
+  // live-latency fallback when no history exists
+  const liveFast = { server: 'x', port: 1, latency: 40 };
+  const liveDead = { server: 'y', port: 1, latency: -1 };
+  ok(nodeHealthScore(liveFast, stats) > 0 && nodeHealthScore(liveDead, stats) < -900, 'health: falls back to live latency');
+  // ordering is stable & good-first; untested keeps its input position among peers
+  const order = orderByHealth([dead, untested, slow, good], stats).map((n) => n.server);
+  ok(order.join(',') === '1.1.1.1,3.3.3.3,9.9.9.9,2.2.2.2', `orderByHealth good-first -> ${order.join(',')}`);
+}
+
+// --- rule preview: kept vs dropped-with-reason (mirrors filterNodes order) ---
+{
+  const pnodes = [
+    { name: '香港01', type: 'ss', latency: 80 },
+    { name: '美国官网', type: 'ss', latency: 120 },     // exclude match
+    { name: '日本vmess', type: 'vmess', latency: 500 }, // excluded protocol
+    { name: '新加坡', type: 'ss', latency: -1 },         // timeout
+    { name: '台湾', type: 'ss', latency: 900 },          // over latency ceiling
+    { name: '韩国', type: 'trojan', latency: 60 },       // not in include
+  ];
+  const pv = previewFilter(pnodes, {
+    include: '香港|美国|新加坡|台湾|日本', exclude: '官网',
+    excludeProtocols: ['vmess'], maxLatency: 200,
+  });
+  const keptNames = pv.kept.map((n) => n.name);
+  ok(keptNames.length === 1 && keptNames[0] === '香港01', `preview kept -> ${keptNames.join(',')}`);
+  const reasons = Object.fromEntries(pv.dropped.map((d) => [d.name, d.reason]));
+  ok(reasons['美国官网'] === 'exclude', 'preview reason exclude');
+  ok(reasons['日本vmess'] === 'exproto', 'preview reason excluded-protocol');
+  ok(reasons['新加坡'] === 'timeout', 'preview reason timeout');
+  ok(reasons['台湾'] === 'latency', 'preview reason latency');
+  ok(reasons['韩国'] === 'include', 'preview reason not-included');
+  ok(pv.keptCount === undefined && (pv.kept.length + pv.dropped.length) === 6, 'preview accounts for every node');
+}
+
+// --- audit: action description + body sanitization ---
+{
+  ok(describeAction('DELETE', '/api/users/5') === '删除用户 #5', `describeAction delete user -> ${describeAction('DELETE', '/api/users/5')}`);
+  ok(describeAction('POST', '/api/airports') === '新增机场', `describeAction create airport -> ${describeAction('POST', '/api/airports')}`);
+  ok(describeAction('PUT', '/api/airports/3') === '修改机场 #3', `describeAction update airport -> ${describeAction('PUT', '/api/airports/3')}`);
+  ok(describeAction('POST', '/api/airports/3/fetch') === '机场 #3 · 拉取', `describeAction airport fetch -> ${describeAction('POST', '/api/airports/3/fetch')}`);
+  ok(describeAction('POST', '/api/users/batch/delete') === '用户 · 批量删除', `describeAction batch delete -> ${describeAction('POST', '/api/users/batch/delete')}`);
+  ok(describeAction('POST', '/api/settings/account') === '设置 · 修改账户', `describeAction account -> ${describeAction('POST', '/api/settings/account')}`);
+  ok(describeAction('POST', '/api/nodes/latency') === '节点 · 延迟检测', `describeAction latency -> ${describeAction('POST', '/api/nodes/latency')}`);
+  // sanitize: secrets redacted, plain fields kept, empty -> null
+  const clean = JSON.parse(sanitizeBody({ username: 'admin', password: 'hunter2', newPassword: 'x', otp: '123', nested: { authToken: 't', name: 'ok' } }));
+  ok(clean.username === 'admin' && clean.password === '***' && clean.newPassword === '***' && clean.otp === '***', 'sanitizeBody redacts secrets');
+  ok(clean.nested.authToken === '***' && clean.nested.name === 'ok', 'sanitizeBody redacts nested secrets, keeps plain');
+  ok(sanitizeBody({}) === null && sanitizeBody(null) === null && sanitizeBody(Buffer.from('x')) === null, 'sanitizeBody empty/buffer -> null');
+  const longStr = sanitizeBody({ content: 'a'.repeat(500) });
+  ok(JSON.parse(longStr).content.length <= 301, 'sanitizeBody truncates long strings');
 }
 
 // --- UA detection ---

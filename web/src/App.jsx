@@ -11,6 +11,7 @@ import Nodes from './pages/Nodes.jsx';
 import Users from './pages/Users.jsx';
 import Templates from './pages/Templates.jsx';
 import Automation from './pages/Automation.jsx';
+import Audit from './pages/Audit.jsx';
 import Settings from './pages/Settings.jsx';
 
 const NAV = [
@@ -20,6 +21,7 @@ const NAV = [
   { to: '/users', label: '用户', icon: '👥' },
   { to: '/templates', label: '订阅模板', icon: '📝' },
   { to: '/automation', label: '自动化', icon: '🤖' },
+  { to: '/audit', label: '操作审计', icon: '🛡️' },
   { to: '/settings', label: '设置', icon: '⚙️' },
 ];
 
@@ -87,6 +89,7 @@ function Shell({ auth, onLogout, toast }) {
           <Route path="/users" element={<Users toast={toast} />} />
           <Route path="/templates" element={<Templates toast={toast} />} />
           <Route path="/automation" element={<Automation toast={toast} />} />
+          <Route path="/audit" element={<Audit toast={toast} />} />
           <Route path="/settings" element={<Settings toast={toast} onAccountChange={onLogout} />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>

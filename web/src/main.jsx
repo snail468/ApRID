@@ -14,3 +14,11 @@ createRoot(document.getElementById('root')).render(
     </BrowserRouter>
   </React.StrictMode>
 );
+
+// register the PWA service worker (production build only — dev serves un-hashed
+// modules that shouldn't be cached). Failures are non-fatal.
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}

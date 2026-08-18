@@ -270,6 +270,48 @@ tr.row-active   { box-shadow: inset 3px 0 0 transparent; }
   .mcard .mrow .mono { word-break: break-all; text-align: right; }
 }
 
+/* clash 路由规则可视化编辑器 */
+.clash-rules.empty-block { padding: 12px; border: 1px dashed var(--border); border-radius: var(--radius); }
+.cr-list { display: flex; flex-direction: column; gap: 6px; max-height: 360px; overflow-y: auto; padding-right: 4px; }
+.cr-row { display: flex; align-items: center; gap: 6px; }
+.cr-move { display: flex; flex-direction: column; gap: 2px; }
+.cr-row input { padding: 6px 8px; font-size: 13px; }
+.cr-row .cr-type { flex: 0 0 130px; }
+.cr-row .cr-value { flex: 1 1 auto; min-width: 80px; }
+.cr-row .cr-policy { flex: 0 0 130px; }
+.cr-row .cr-opts { flex: 0 0 120px; }
+.btn.xs { padding: 2px 7px; font-size: 11px; line-height: 1.4; min-width: 24px; }
+@media (max-width: 640px) {
+  .cr-row { flex-wrap: wrap; }
+  .cr-row .cr-type, .cr-row .cr-policy, .cr-row .cr-opts { flex: 1 1 45%; }
+  .cr-row .cr-value { flex: 1 1 100%; }
+}
+
+/* live rule preview (user/airport filter editor) */
+.rule-preview { margin: 12px 0 4px; border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; background: var(--bg-elev); }
+.rule-preview-head { display: flex; align-items: center; }
+.rp-tabs { display: flex; gap: 6px; margin: 8px 0; }
+.rp-tab { background: var(--bg-elev2); border: 1px solid var(--border); color: var(--text-dim); border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+.rp-tab.active { background: var(--accent-dim); color: var(--text); border-color: var(--accent); }
+.rp-list { max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.rp-item { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; font-size: 13px; }
+.rp-item:nth-child(odd) { background: var(--bg-elev2); }
+.rp-item .rp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rp-item .rp-proto { flex: 0 0 auto; }
+
+/* installed PWA / notched phones: keep the top nav and page content clear of the
+   status bar and home indicator (paired with viewport-fit=cover). */
+@supports (padding: env(safe-area-inset-top)) {
+  @media (max-width: 860px) {
+    .sidebar { padding-top: env(safe-area-inset-top); }
+    .content {
+      padding-left: calc(16px + env(safe-area-inset-left));
+      padding-right: calc(16px + env(safe-area-inset-right));
+      padding-bottom: calc(16px + env(safe-area-inset-bottom));
+    }
+  }
+}
+
 /* phones: stack toolbars and roomy modals */
 @media (max-width: 560px) {
   .modal-backdrop { padding: 16px 10px; }

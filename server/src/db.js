@@ -182,11 +182,43 @@ CREATE TABLE IF NOT EXISTS airport_costs (
   created_at INTEGER NOT NULL
 );
 
+-- admin audit trail: one row per mutating admin action (谁/何时/改了什么/结果).
+-- Written by the audit middleware after the response finishes, so logging can
+-- never break the request. The detail column is a sanitized JSON snapshot of
+-- the request body (passwords/tokens/secrets redacted).
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  actor      TEXT,      -- admin username (or attempted username on login)
+  method     TEXT,      -- POST | PUT | DELETE | PATCH
+  path       TEXT,      -- request path (no query string)
+  action     TEXT,      -- human-readable 中文 summary
+  status     INTEGER,   -- HTTP status code
+  ip         TEXT,
+  detail     TEXT,      -- sanitized JSON body snapshot
+  created_at INTEGER NOT NULL
+);
+
+-- history of every latency check, one row per node per run. Keyed by
+-- (airport_id, server, port) rather than nodes.id because airport refetch
+-- deletes+reinserts node rows (new ids) — this key stays stable, so a node's
+-- availability/latency history survives re-pulls. Powers 可用率 + 延迟趋势 and
+-- the good-node-first ordering when building subscriptions.
+CREATE TABLE IF NOT EXISTS node_checks (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  airport_id INTEGER,
+  server     TEXT,
+  port       INTEGER,
+  latency    INTEGER,   -- ms, -1 = timeout/unreachable
+  ts         INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_nodes_airport ON nodes(airport_id);
 CREATE INDEX IF NOT EXISTS idx_users_token   ON users(token);
 CREATE INDEX IF NOT EXISTS idx_sub_logs_user ON sub_logs(user_id, id);
 CREATE INDEX IF NOT EXISTS idx_snap_airport  ON traffic_snapshots(airport_id, ts);
 CREATE INDEX IF NOT EXISTS idx_costs_airport ON airport_costs(airport_id, id);
+CREATE INDEX IF NOT EXISTS idx_node_checks   ON node_checks(airport_id, server, port, ts);
+CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at);
 `);
 
 // ---- lightweight migrations: add columns that may be missing on older DBs ----

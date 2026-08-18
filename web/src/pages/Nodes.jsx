@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { API } from '../api.js';
-import { useConfirm } from '../ui.jsx';
+import { useConfirm, Modal, fmtDateTime } from '../ui.jsx';
 import { useTable, SortTh } from '../hooks/useTable.jsx';
 import { useCachedResource } from '../store.js';
 
@@ -8,6 +8,7 @@ export default function Nodes({ toast }) {
   const { data: rows = [], loading, refresh } = useCachedResource('nodes:', () => API.nodes());
   const { data: airports = [] } = useCachedResource('airports', () => API.airports());
   const [pinging, setPinging] = useState(false);
+  const [trendNode, setTrendNode] = useState(null);
   const [confirm, confirmNode] = useConfirm();
 
   const load = () => refresh();
@@ -62,6 +63,7 @@ export default function Nodes({ toast }) {
                   <SortTh label="端口" k="port" table={t} />
                   <SortTh label="所属机场" k="airport_name" table={t} />
                   <SortTh label="延迟" k="latency" table={t} />
+                  <th className="nosort" title="近7天检测的连通率">可用率</th>
                   <th className="nosort">操作</th>
                 </tr>
               </thead>
@@ -74,8 +76,12 @@ export default function Nodes({ toast }) {
                     <td className="mono small">{n.server}</td>
                     <td>{n.port}</td>
                     <td className="small">{n.airport_name || '-'}{n.airport_account ? <span className="muted"> / {n.airport_account}</span> : ''}</td>
-                    <td>{latencyCell(n.latency)}</td>
-                    <td className="actions"><button className="btn sm danger" onClick={() => del(n.id)}>删</button></td>
+                    <td>{latencyCell(n.latency, n.latency_at)}</td>
+                    <td>{uptimeCell(n.check_ok, n.check_total)}</td>
+                    <td className="actions">
+                      <button className="btn sm" onClick={() => setTrendNode(n)}>趋势</button>
+                      <button className="btn sm danger" onClick={() => del(n.id)}>删</button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -89,18 +95,88 @@ export default function Nodes({ toast }) {
             <div className="mrow"><strong>{n.name}</strong><span className="badge blue">{n.type}</span></div>
             <div className="mrow"><span className="k">服务器</span><span className="mono small">{n.server}:{n.port}</span></div>
             <div className="mrow"><span className="k">机场</span><span>{n.airport_name}</span></div>
-            <div className="mrow"><span className="k">延迟</span>{latencyCell(n.latency)}</div>
+            <div className="mrow"><span className="k">延迟</span>{latencyCell(n.latency, n.latency_at)}</div>
+            <div className="mrow"><span className="k">可用率</span>{uptimeCell(n.check_ok, n.check_total)}</div>
+            <div className="mrow"><span className="k" /><button className="btn sm" onClick={() => setTrendNode(n)}>延迟趋势</button></div>
           </div>
         ))}
       </div>
+      {trendNode && <LatencyTrendModal node={trendNode} toast={toast} onClose={() => setTrendNode(null)} />}
       {confirmNode}
     </>
   );
 }
 
-function latencyCell(l) {
+function latencyCell(l, at) {
   if (l == null) return <span className="muted">-</span>;
-  if (l < 0) return <span className="badge red">超时</span>;
+  const title = at ? `检测于 ${fmtDateTime(at)}` : undefined;
+  if (l < 0) return <span className="badge red" title={title}>超时</span>;
   const cls = l < 200 ? 'green' : l < 500 ? 'yellow' : 'red';
-  return <span className={`badge ${cls}`}>{l} ms</span>;
+  return <span className={`badge ${cls}`} title={title}>{l} ms</span>;
+}
+
+function uptimeCell(ok, total) {
+  if (!total) return <span className="muted">-</span>;
+  const pct = Math.round((ok / total) * 100);
+  const cls = pct >= 95 ? 'green' : pct >= 80 ? 'yellow' : 'red';
+  return <span className={`badge ${cls}`} title={`近7天 ${ok}/${total} 次连通`}>{pct}%</span>;
+}
+
+/* ---------------- 延迟趋势 ---------------- */
+function LatencyTrendModal({ node, toast, onClose }) {
+  const [history, setHistory] = useState(null);
+  useEffect(() => {
+    API.nodeHistory(node.id, 7).then(setHistory).catch((e) => { toast.error(e.message); setHistory([]); });
+  }, [node.id]);
+
+  const ok = (history || []).filter((h) => h.latency >= 0);
+  const avg = ok.length ? Math.round(ok.reduce((s, h) => s + h.latency, 0) / ok.length) : null;
+  const uptime = history && history.length ? Math.round((ok.length / history.length) * 100) : null;
+
+  return (
+    <Modal title={`延迟趋势 · ${node.name}`} onClose={onClose} wide>
+      <div className="muted small" style={{ marginBottom: 10 }}>
+        {node.server}:{node.port}　近7天检测 {history ? history.length : '—'} 次
+        {avg != null && <>　平均 {avg} ms</>}
+        {uptime != null && <>　可用率 {uptime}%</>}
+      </div>
+      {!history ? <div className="muted small"><span className="spin" /></div>
+        : history.length === 0 ? <div className="muted small">暂无检测记录。到节点管理点「检测全部延迟」，或开启延迟检测自动化后会逐渐积累。</div>
+        : <LatencyChart samples={history} />}
+    </Modal>
+  );
+}
+
+function LatencyChart({ samples }) {
+  const W = 560, H = 160, pad = 26;
+  const okVals = samples.filter((s) => s.latency >= 0).map((s) => s.latency);
+  const max = Math.max(50, ...okVals);
+  const t0 = samples[0].ts, t1 = samples[samples.length - 1].ts;
+  const span = Math.max(1, t1 - t0);
+  const x = (ts) => pad + ((ts - t0) / span) * (W - pad * 2);
+  const y = (l) => H - pad - (l / max) * (H - pad * 2);
+
+  // build the line only over successful readings; timeouts are drawn as red marks
+  const pts = samples.filter((s) => s.latency >= 0).map((s) => `${x(s.ts).toFixed(1)},${y(s.latency).toFixed(1)}`).join(' ');
+  const timeouts = samples.filter((s) => s.latency < 0);
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto' }}>
+      <line x1={pad} y1={H - pad} x2={W - pad} y2={H - pad} stroke="var(--border)" />
+      <line x1={pad} y1={pad} x2={pad} y2={H - pad} stroke="var(--border)" />
+      <text x={pad - 4} y={pad + 4} textAnchor="end" fontSize="10" fill="var(--text-dim)">{max}ms</text>
+      <text x={pad - 4} y={H - pad} textAnchor="end" fontSize="10" fill="var(--text-dim)">0</text>
+      {pts && <polyline points={pts} fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
+      {samples.filter((s) => s.latency >= 0).map((s, i) => (
+        <circle key={`o${i}`} cx={x(s.ts)} cy={y(s.latency)} r="2" fill="var(--accent)">
+          <title>{`${fmtDateTime(s.ts)}：${s.latency} ms`}</title>
+        </circle>
+      ))}
+      {timeouts.map((s, i) => (
+        <circle key={`t${i}`} cx={x(s.ts)} cy={H - pad} r="3" fill="var(--red)">
+          <title>{`${fmtDateTime(s.ts)}：超时`}</title>
+        </circle>
+      ))}
+    </svg>
+  );
 }

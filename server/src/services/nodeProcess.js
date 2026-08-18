@@ -65,6 +65,37 @@ export function filterNodes(nodes, filter = {}) {
   });
 }
 
+// Like filterNodes, but instead of just returning survivors it explains the
+// verdict for every node: kept vs dropped-with-reason. Powers the live rule
+// preview in the editor. Reason codes: proto | exproto | include | exclude |
+// timeout | latency. Checks run in the SAME order as filterNodes so the preview
+// matches real delivery exactly (first failing rule wins).
+export function previewFilter(nodes, filter = {}) {
+  const inc = toRegExp(filter.include);
+  const exc = toRegExp(filter.exclude);
+  const protos = Array.isArray(filter.protocols) ? filter.protocols.filter(Boolean) : [];
+  const exProtos = Array.isArray(filter.excludeProtocols) ? filter.excludeProtocols.filter(Boolean) : [];
+  const hasMax = filter.maxLatency !== undefined && filter.maxLatency !== null && filter.maxLatency !== '';
+  const maxLat = hasMax ? Number(filter.maxLatency) : null;
+  const kept = [];
+  const dropped = [];
+  for (const n of nodes) {
+    let reason = null;
+    if (protos.length && !protos.includes(n.type)) reason = 'proto';
+    else if (exProtos.length && exProtos.includes(n.type)) reason = 'exproto';
+    else if (inc && !inc.test(n.name)) reason = 'include';
+    else if (exc && exc.test(n.name)) reason = 'exclude';
+    else if (hasMax && !Number.isNaN(maxLat) && n.latency != null) {
+      if (n.latency < 0) reason = 'timeout';
+      else if (maxLat > 0 && n.latency > maxLat) reason = 'latency';
+    }
+    const entry = { name: n.name, type: n.type, latency: n.latency ?? null };
+    if (reason) dropped.push({ ...entry, reason });
+    else kept.push(entry);
+  }
+  return { kept, dropped };
+}
+
 export function renameNodes(nodes, filter = {}) {
   const rules = Array.isArray(filter.rename) ? filter.rename : [];
   const prefix = filter.prefix || '';
@@ -99,6 +130,35 @@ export function dedupWithinGroup(nodes) {
 export function applyGlobalPrefix(nodes, prefix) {
   if (!prefix) return nodes;
   return nodes.map((n) => ({ ...n, name: `${prefix}${n.name}` }));
+}
+
+// ---- health-based ordering (pure; stats come from nodeHealth.getNodeStatsMap) ----
+// Sortable score, higher = healthier. Falls back to the node's live `latency`
+// when there is no history. Buckets so order is: alive-fast > alive-slow >
+// untested (neutral 0) > timed-out/dead. Untested nodes all score 0 so a stable
+// sort keeps their original relative order.
+export function nodeHealthScore(node, statsMap) {
+  const s = statsMap.get(`${node.server}:${node.port}`);
+  let uptime = null;
+  let lat = null;
+  if (s && s.total > 0) {
+    uptime = s.ok / s.total;
+    lat = s.ok > 0 ? s.avgLatency : -1;
+  } else if (node.latency != null) {
+    lat = node.latency;                       // live reading fallback
+    uptime = node.latency >= 0 ? null : 0;    // live timeout → treat as dead
+  }
+  if (uptime == null && lat == null) return 0;                 // no info → neutral
+  const dead = (uptime != null && uptime === 0) || lat == null || lat < 0;
+  if (dead) return -1000 + (uptime != null ? uptime * 100 : 0);
+  const up = uptime != null ? uptime : 0.8;   // alive but no uptime history → decent
+  const latMs = Math.min(lat, 2000);
+  return up * 1000 - latMs / 4;               // uptime dominates, latency is the tiebreak
+}
+
+// Stable "good nodes first" ordering given a precomputed stats map.
+export function orderByHealth(nodes, statsMap) {
+  return [...nodes].sort((a, b) => nodeHealthScore(b, statsMap) - nodeHealthScore(a, statsMap));
 }
 
 // full pipeline for a single airport's nodes

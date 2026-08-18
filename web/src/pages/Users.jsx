@@ -4,7 +4,7 @@ import { API } from '../api.js';
 import { Modal, useConfirm, copyText, fmtBytes, fmtDate, fmtDateTime, daysLeft, toDatetimeLocal, fromDatetimeLocal, ActionMenu } from '../ui.jsx';
 import { useTable, SortTh } from '../hooks/useTable.jsx';
 import { useCachedResource, invalidate } from '../store.js';
-import { GroupSelect, GroupManagerModal, ProtocolPicker } from '../components.jsx';
+import { GroupSelect, GroupManagerModal, ProtocolPicker, RulePreview } from '../components.jsx';
 
 const STATUS_LABEL = { active: '正常', expiring: '即将到期', expired: '已过期', exhausted: '流量用完', disabled: '已停用' };
 const STATUS_BADGE = { active: 'green', expiring: 'yellow', expired: 'red', exhausted: 'red', disabled: 'gray' };
@@ -331,6 +331,16 @@ function UserModal({ user, templates, airports, groups, toast, assignedByAirport
         </div>
       </div>
       <div className="field"><label>节点名前缀</label><input value={f.prefix} onChange={(e) => set('prefix', e.target.value)} /></div>
+
+      <RulePreview
+        airports={f.airports}
+        filter={{
+          include: f.include, exclude: f.exclude,
+          protocols: f.protocols, excludeProtocols: f.excludeProtocols,
+          maxLatency: f.maxLatency,
+        }}
+      />
+
       <div className="field"><label>备注</label><input value={f.remark} onChange={(e) => set('remark', e.target.value)} /></div>
     </Modal>
   );

@@ -1,7 +1,13 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { API } from '../api.js';
 import { Modal, useConfirm } from '../ui.jsx';
 import { useCachedResource, invalidate } from '../store.js';
+import { parseClashRules, spliceClashRules, partsToFields, fieldsToParts, extractPolicies } from '../clashRules.js';
+
+const RULE_TYPES = [
+  'DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'GEOIP', 'IP-CIDR', 'IP-CIDR6',
+  'RULE-SET', 'PROCESS-NAME', 'DST-PORT', 'SRC-IP-CIDR', 'MATCH',
+];
 
 const CLIENT_TYPES = [
   { v: 'clash', l: 'Clash.Meta' }, { v: 'singbox', l: 'sing-box' }, { v: 'base64', l: '通用 Base64' },
@@ -66,6 +72,7 @@ function TemplateModal({ tpl, toast, onClose, onSaved }) {
     content: tpl.content || '', is_default: !!tpl.is_default,
   });
   const [saving, setSaving] = useState(false);
+  const [mode, setMode] = useState('raw'); // 'raw' | 'rules' (rules only for clash)
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
 
   const save = async () => {
@@ -96,10 +103,90 @@ function TemplateModal({ tpl, toast, onClose, onSaved }) {
         <label htmlFor="isdef" style={{ margin: 0 }}>设为该客户端类型的默认模板</label>
       </div>
       <div className="field">
-        <label>模板内容</label>
-        <textarea style={{ minHeight: 320 }} value={f.content} onChange={(e) => set('content', e.target.value)}
-          placeholder="Clash / sing-box 配置，节点插入位置用 <PROXIES> 占位" />
+        <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>模板内容</span>
+          {f.client_type === 'clash' && (
+            <span className="tabs" style={{ display: 'flex', gap: 6 }}>
+              <button type="button" className={`rp-tab ${mode === 'raw' ? 'active' : ''}`} onClick={() => setMode('raw')}>原始文本</button>
+              <button type="button" className={`rp-tab ${mode === 'rules' ? 'active' : ''}`} onClick={() => setMode('rules')}>可视化规则</button>
+            </span>
+          )}
+        </label>
+        {f.client_type === 'clash' && mode === 'rules'
+          ? <ClashRulesEditor content={f.content} onChange={(v) => set('content', v)} />
+          : <textarea style={{ minHeight: 320 }} value={f.content} onChange={(e) => set('content', e.target.value)}
+              placeholder="Clash / sing-box 配置，节点插入位置用 <PROXIES> 占位" />}
       </div>
     </Modal>
+  );
+}
+
+/* ---------------- Clash 路由规则可视化编辑器 ----------------
+   Edits only the top-level `rules:` list; everything else in the YAML
+   (proxy-groups / rule-providers / 注释) is spliced back untouched. Content stays
+   the single source of truth — each change re-splices and calls onChange. */
+function ClashRulesEditor({ content, onChange }) {
+  const parsed = useMemo(() => parseClashRules(content), [content]);
+  const policies = useMemo(() => extractPolicies(content), [content]);
+
+  if (!parsed.found) {
+    return (
+      <div className="clash-rules empty-block">
+        <div className="muted small">
+          未找到 <code className="mono">rules:</code> 段——该模板可能不是标准 Clash 配置。可切回「原始文本」编辑，或
+          <button type="button" className="btn sm" style={{ marginLeft: 6 }}
+            onClick={() => onChange(spliceClashRules(content, [{ parts: ['MATCH', 'DIRECT'] }]))}>
+            新建 rules 段
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const rules = parsed.rules;
+  const commit = (next) => onChange(spliceClashRules(content, next));
+  const setField = (i, key, val) => {
+    const flds = partsToFields(rules[i].parts); flds[key] = val;
+    commit(rules.map((r, idx) => (idx === i ? { parts: fieldsToParts(flds) } : r)));
+  };
+  const move = (i, dir) => {
+    const j = i + dir; if (j < 0 || j >= rules.length) return;
+    const next = [...rules]; [next[i], next[j]] = [next[j], next[i]]; commit(next);
+  };
+  const del = (i) => commit(rules.filter((_, idx) => idx !== i));
+  const add = () => commit([...rules, { parts: ['DOMAIN-SUFFIX', '', policies[0] || 'DIRECT'] }]);
+
+  return (
+    <div className="clash-rules">
+      <datalist id="clash-rule-types">{RULE_TYPES.map((t) => <option key={t} value={t} />)}</datalist>
+      <datalist id="clash-policies">{policies.map((p) => <option key={p} value={p} />)}</datalist>
+      <div className="muted small" style={{ marginBottom: 8 }}>
+        共 {rules.length} 条规则。顺序即匹配优先级（从上到下），<code className="mono">MATCH</code> 兜底应放最后。仅编辑 rules 段，其余配置原样保留。
+      </div>
+      <div className="cr-list">
+        {rules.map((r, i) => {
+          const flds = partsToFields(r.parts);
+          const noValue = flds.type === 'MATCH' || flds.type === 'FINAL';
+          return (
+            <div className="cr-row" key={i}>
+              <div className="cr-move">
+                <button type="button" className="btn xs" disabled={i === 0} onClick={() => move(i, -1)} title="上移">↑</button>
+                <button type="button" className="btn xs" disabled={i === rules.length - 1} onClick={() => move(i, 1)} title="下移">↓</button>
+              </div>
+              <input className="cr-type" list="clash-rule-types" value={flds.type} placeholder="类型"
+                onChange={(e) => setField(i, 'type', e.target.value)} />
+              <input className="cr-value" value={flds.value} placeholder={noValue ? '（无需匹配值）' : '匹配值 (域名/CIDR/规则集名)'}
+                disabled={noValue} onChange={(e) => setField(i, 'value', e.target.value)} />
+              <input className="cr-policy" list="clash-policies" value={flds.policy} placeholder="策略"
+                onChange={(e) => setField(i, 'policy', e.target.value)} />
+              <input className="cr-opts" value={flds.options} placeholder="选项 (如 no-resolve)"
+                onChange={(e) => setField(i, 'options', e.target.value)} />
+              <button type="button" className="btn xs danger" onClick={() => del(i)} title="删除">×</button>
+            </div>
+          );
+        })}
+      </div>
+      <button type="button" className="btn sm" style={{ marginTop: 8 }} onClick={add}>＋ 添加规则</button>
+    </div>
   );
 }

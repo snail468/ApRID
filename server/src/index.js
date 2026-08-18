@@ -21,6 +21,8 @@ import automationRoutes from './routes/automation.js';
 import actionRoutes from './routes/action.js';
 import plansRoutes from './routes/plans.js';
 import portalRoutes from './routes/portal.js';
+import auditRoutes from './routes/audit.js';
+import { auditMiddleware } from './services/audit.js';
 
 seedAdmin();
 seedTemplates();
@@ -46,7 +48,8 @@ app.use('/action', actionRoutes);
 // public self-service portal for end users (view expiry/traffic/subscription)
 app.use('/portal', portalRoutes);
 
-// admin API
+// admin API — audit every mutating call (records after the response finishes)
+app.use('/api', auditMiddleware);
 app.use('/api/auth', authRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/airports', airportRoutes);
@@ -58,6 +61,7 @@ app.use('/api/stats', statsRoutes);
 app.use('/api/groups', groupRoutes);
 app.use('/api/automation', automationRoutes);
 app.use('/api/plans', plansRoutes);
+app.use('/api/audit', auditRoutes);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'API not found' }));
 

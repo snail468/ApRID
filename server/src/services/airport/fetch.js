@@ -85,12 +85,22 @@ async function doFetchAirport(airportId, ap) {
 
   const now = Date.now();
   const tx = db.transaction(() => {
+    // Carry the last latency reading across the delete+reinsert: a re-pull would
+    // otherwise reset every node's latency to NULL (so 节点管理 showed "-" after
+    // any fetch). Match on server:port, which is stable across re-pulls even when
+    // names/ids change.
+    const prevLatency = new Map(
+      db.prepare('SELECT server, port, latency, latency_at FROM nodes WHERE airport_id = ?')
+        .all(airportId)
+        .map((r) => [`${r.server}:${r.port}`, r])
+    );
     db.prepare('DELETE FROM nodes WHERE airport_id = ?').run(airportId);
     const ins = db.prepare(
-      'INSERT INTO nodes (airport_id, name, type, server, port, raw, uri, group_name, created_at) VALUES (?,?,?,?,?,?,?,?,?)'
+      'INSERT INTO nodes (airport_id, name, type, server, port, raw, uri, group_name, latency, latency_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
     );
     for (const n of nodes) {
-      ins.run(airportId, n.name, n.type, n.server, n.port, JSON.stringify(n.raw || {}), n.uri || '', ap.group_name || '', now);
+      const prev = prevLatency.get(`${n.server}:${n.port}`);
+      ins.run(airportId, n.name, n.type, n.server, n.port, JSON.stringify(n.raw || {}), n.uri || '', ap.group_name || '', prev?.latency ?? null, prev?.latency_at ?? null, now);
     }
     db.prepare(
       `UPDATE airports SET last_fetch_at = ?, last_fetch_ok = ?, fetch_fail_count = 0,

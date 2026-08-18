@@ -199,6 +199,83 @@ export function NodeProcessingEditor({ value = {}, onChange }) {
   );
 }
 
+/* -------- live rule preview --------
+   Given the draft filter + selected airports, debounce-fetches /api/nodes/preview
+   and shows which nodes are kept vs dropped (with reason) — "所见即所得" for the
+   include/exclude/protocol/latency rules. */
+const DROP_REASON = {
+  proto: { label: '协议不符', cls: 'gray' },
+  exproto: { label: '协议排除', cls: 'gray' },
+  include: { label: '未匹配包含', cls: 'yellow' },
+  exclude: { label: '命中排除', cls: 'yellow' },
+  timeout: { label: '超时', cls: 'red' },
+  latency: { label: '延迟超限', cls: 'red' },
+};
+
+export function RulePreview({ airports = [], filter = {} }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+  const [tab, setTab] = useState('kept');
+
+  const airportsKey = JSON.stringify(airports);
+  const filterKey = JSON.stringify(filter);
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    const t = setTimeout(() => {
+      API.previewNodes({ airportIds: airports, filter })
+        .then((d) => { if (alive) { setData(d); setErr(null); } })
+        .catch((e) => { if (alive) setErr(e.message); })
+        .finally(() => { if (alive) setLoading(false); });
+    }, 350);
+    return () => { alive = false; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [airportsKey, filterKey]);
+
+  const list = data ? (tab === 'kept' ? data.kept : data.dropped) : [];
+
+  return (
+    <div className="rule-preview">
+      <div className="rule-preview-head">
+        <span className="section-label" style={{ margin: 0 }}>规则实时预览</span>
+        {loading && <span className="spin" style={{ marginLeft: 8 }} />}
+        {data && !loading && (
+          <span className="muted small" style={{ marginLeft: 'auto' }}>
+            命中 <strong style={{ color: 'var(--green)' }}>{data.keptCount}</strong>
+            {' / '}排除 <strong style={{ color: 'var(--red)' }}>{data.droppedCount}</strong>
+            {' / '}共 {data.total}
+          </span>
+        )}
+      </div>
+      {err ? <div className="muted small">预览失败：{err}</div>
+        : data && data.total === 0 ? <div className="muted small">所选机场暂无节点（请先在机场管理拉取订阅）。</div>
+        : data ? (
+          <>
+            <div className="rp-tabs">
+              <button type="button" className={`rp-tab ${tab === 'kept' ? 'active' : ''}`} onClick={() => setTab('kept')}>命中 {data.keptCount}</button>
+              <button type="button" className={`rp-tab ${tab === 'dropped' ? 'active' : ''}`} onClick={() => setTab('dropped')}>排除 {data.droppedCount}</button>
+            </div>
+            <div className="rp-list">
+              {list.length === 0 ? <div className="muted small" style={{ padding: 8 }}>无</div>
+                : list.map((n, i) => (
+                  <div className="rp-item" key={i}>
+                    <span className="rp-name">{n.name}</span>
+                    <span className="badge blue rp-proto">{n.type}</span>
+                    {n.latency != null && n.latency >= 0 && <span className="muted small">{n.latency}ms</span>}
+                    {tab === 'dropped' && n.reason && (
+                      <span className={`badge ${DROP_REASON[n.reason]?.cls || 'gray'}`}>{DROP_REASON[n.reason]?.label || n.reason}</span>
+                    )}
+                  </div>
+                ))}
+              {data.truncated && <div className="muted small" style={{ padding: 6 }}>仅显示前 400 条…</div>}
+            </div>
+          </>
+        ) : <div className="muted small">加载中…</div>}
+    </div>
+  );
+}
+
 /* -------- group management modal (add / rename / delete) -------- */
 export function GroupManagerModal({ kind, title, toast, onClose, onChanged }) {
   const [rows, setRows] = useState([]);

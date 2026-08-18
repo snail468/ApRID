@@ -4,6 +4,7 @@ import { fetchAirport } from './airport/fetch.js';
 import { fmtBytes } from './util.js';
 import { maybeSendUserAlert, maybeSendAirportAlert, maybeSendUserSecurityAlert } from './alerts.js';
 import { pingNodes } from './latency.js';
+import { recordLatencyResults } from './nodeHealth.js';
 
 function createTask(type, refId) {
   const now = Date.now();
@@ -215,8 +216,8 @@ export async function runLatencyCheck(airportIds = [], { cleanup = false } = {})
   try {
     const ids = Array.isArray(airportIds) ? airportIds.map(Number).filter((n) => !Number.isNaN(n)) : [];
     const rows = ids.length
-      ? db.prepare(`SELECT id, server, port FROM nodes WHERE airport_id IN (${ids.map(() => '?').join(',')})`).all(...ids)
-      : db.prepare('SELECT id, server, port FROM nodes').all();
+      ? db.prepare(`SELECT id, airport_id, server, port FROM nodes WHERE airport_id IN (${ids.map(() => '?').join(',')})`).all(...ids)
+      : db.prepare('SELECT id, airport_id, server, port FROM nodes').all();
     appendLog(taskId, `开始延迟检测：${ids.length ? `机场 [${ids.join(', ')}]` : '全部机场'}，共 ${rows.length} 个节点${cleanup ? '（检测后清理死节点）' : ''}`);
     if (!rows.length) {
       appendLog(taskId, '没有可检测的节点');
@@ -224,9 +225,7 @@ export async function runLatencyCheck(airportIds = [], { cleanup = false } = {})
       return { taskId, total: 0, ok: 0, timeout: 0, deleted: 0 };
     }
     const results = await pingNodes(rows);
-    const now = Date.now();
-    const upd = db.prepare('UPDATE nodes SET latency = ?, latency_at = ? WHERE id = ?');
-    db.transaction((list) => list.forEach((r) => upd.run(r.latency, now, r.id)))(results);
+    recordLatencyResults(rows, results);
     const timeouts = results.filter((r) => r.latency < 0);
     const ok = results.length - timeouts.length;
     let deleted = 0;

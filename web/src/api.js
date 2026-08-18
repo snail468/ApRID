@@ -92,6 +92,8 @@ export const API = {
   deleteNode: (id) => api.del(`/api/nodes/${id}`),
   batchDeleteNodes: (ids) => api.post('/api/nodes/batch/delete', { ids }),
   nodeLatency: (ids) => api.post('/api/nodes/latency', { ids }),
+  nodeHistory: (id, days = 7) => api.get(`/api/nodes/${id}/history?days=${days}`),
+  previewNodes: (b) => api.post('/api/nodes/preview', b),
   // users
   users: () => api.get('/api/users'),
   createUser: (b) => api.post('/api/users', b),
@@ -111,6 +113,12 @@ export const API = {
   createTemplate: (b) => api.post('/api/templates', b),
   updateTemplate: (id, b) => api.put(`/api/templates/${id}`, b),
   deleteTemplate: (id) => api.del(`/api/templates/${id}`),
+  // audit log
+  audit: (params = {}) => {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null)).toString();
+    return api.get(`/api/audit${qs ? `?${qs}` : ''}`);
+  },
+  auditActors: () => api.get('/api/audit/actors'),
   // tasks
   tasks: () => api.get('/api/tasks'),
   task: (id) => api.get(`/api/tasks/${id}`),
