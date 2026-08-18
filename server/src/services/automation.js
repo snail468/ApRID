@@ -3,8 +3,7 @@ import { resetAirportSubscription } from './airport/adapters.js';
 import { fetchAirport } from './airport/fetch.js';
 import { fmtBytes } from './util.js';
 import { maybeSendUserAlert, maybeSendAirportAlert, maybeSendUserSecurityAlert } from './alerts.js';
-import { pingNodes } from './latency.js';
-import { recordLatencyResults } from './nodeHealth.js';
+import { pingDedupAndRecord } from './nodeHealth.js';
 
 function createTask(type, refId) {
   const now = Date.now();
@@ -208,26 +207,28 @@ export async function runAlertCheck({ recordEmpty = true } = {}) {
 }
 
 // "延迟检测" automation. Measures real TCP-handshake RTT for the selected airports'
-// nodes (empty = all nodes) and writes latency/latency_at back. Reuses pingNodes.
-// With cleanup=true it also deletes nodes that time out (dead nodes); they will
+// nodes (empty = all nodes) and writes latency/latency_at back. Dedupes by physical
+// endpoint so the same server pulled by several accounts is measured once, then the
+// reading is fanned out to every duplicate. freshMinutes>0 reuses a recent reading
+// instead of re-measuring. cleanup=true also deletes timed-out (dead) nodes; they
 // re-appear on the airport's next pull if they come back.
-export async function runLatencyCheck(airportIds = [], { cleanup = false } = {}) {
+export async function runLatencyCheck(airportIds = [], { cleanup = false, freshMinutes = 0 } = {}) {
   const taskId = createTask('latency', null);
   try {
     const ids = Array.isArray(airportIds) ? airportIds.map(Number).filter((n) => !Number.isNaN(n)) : [];
     const rows = ids.length
-      ? db.prepare(`SELECT id, airport_id, server, port FROM nodes WHERE airport_id IN (${ids.map(() => '?').join(',')})`).all(...ids)
-      : db.prepare('SELECT id, airport_id, server, port FROM nodes').all();
+      ? db.prepare(`SELECT id, server, port, latency, latency_at FROM nodes WHERE airport_id IN (${ids.map(() => '?').join(',')})`).all(...ids)
+      : db.prepare('SELECT id, server, port, latency, latency_at FROM nodes').all();
     appendLog(taskId, `开始延迟检测：${ids.length ? `机场 [${ids.join(', ')}]` : '全部机场'}，共 ${rows.length} 个节点${cleanup ? '（检测后清理死节点）' : ''}`);
     if (!rows.length) {
       appendLog(taskId, '没有可检测的节点');
       finishTask(taskId, 'success');
       return { taskId, total: 0, ok: 0, timeout: 0, deleted: 0 };
     }
-    const results = await pingNodes(rows);
-    recordLatencyResults(rows, results);
-    const timeouts = results.filter((r) => r.latency < 0);
-    const ok = results.length - timeouts.length;
+    const { perNode, endpoints, measured, reused } = await pingDedupAndRecord(rows, { freshMinutes });
+    appendLog(taskId, `去重：${rows.length} 个节点 → ${endpoints} 个唯一端点（实测 ${measured}，复用 ${reused}）`);
+    const timeouts = perNode.filter((r) => r.latency < 0);
+    const ok = perNode.length - timeouts.length;
     let deleted = 0;
     if (cleanup && timeouts.length) {
       const del = db.prepare('DELETE FROM nodes WHERE id = ?');
@@ -237,7 +238,7 @@ export async function runLatencyCheck(airportIds = [], { cleanup = false } = {})
     }
     appendLog(taskId, `完成：连通 ${ok} 个，超时 ${timeouts.length} 个${cleanup ? `，清理 ${deleted} 个` : ''}`);
     finishTask(taskId, 'success');
-    return { taskId, total: results.length, ok, timeout: timeouts.length, deleted };
+    return { taskId, total: perNode.length, endpoints, measured, reused, ok, timeout: timeouts.length, deleted };
   } catch (err) {
     appendLog(taskId, `失败：${err.message}`);
     finishTask(taskId, 'failed');

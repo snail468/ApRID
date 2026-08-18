@@ -1,8 +1,7 @@
 import express from 'express';
 import { db, getSetting } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
-import { pingNodes } from '../services/latency.js';
-import { recordLatencyResults, getNodeHistory } from '../services/nodeHealth.js';
+import { pingDedupAndRecord, getNodeHistory } from '../services/nodeHealth.js';
 import { previewFilter, combineExclude } from '../services/nodeProcess.js';
 
 const router = express.Router();
@@ -41,13 +40,13 @@ router.get('/', (req, res) => {
              FROM nodes n
              LEFT JOIN airports a ON a.id = n.airport_id
              LEFT JOIN (
-               SELECT airport_id, server, port,
+               SELECT server, port,
                       COUNT(*) AS total,
                       SUM(CASE WHEN latency >= 0 THEN 1 ELSE 0 END) AS ok,
                       AVG(CASE WHEN latency >= 0 THEN latency END) AS avg_latency
                  FROM node_checks WHERE ts >= ?
-                GROUP BY airport_id, server, port
-             ) h ON h.airport_id = n.airport_id AND h.server = n.server AND h.port = n.port
+                GROUP BY server, port
+             ) h ON h.server = n.server AND h.port = n.port
              WHERE 1=1`;
   const params = [Date.now() - windowDays * 86400000];
   if (airport_id) { sql += ' AND n.airport_id = ?'; params.push(airport_id); }
@@ -57,12 +56,12 @@ router.get('/', (req, res) => {
   res.json(db.prepare(sql).all(...params));
 });
 
-// latency samples for one node over the trailing window (for the 延迟趋势 curve)
+// latency samples for one node's endpoint over the trailing window (延迟趋势 curve)
 router.get('/:id/history', (req, res) => {
-  const node = db.prepare('SELECT airport_id, server, port FROM nodes WHERE id = ?').get(req.params.id);
+  const node = db.prepare('SELECT server, port FROM nodes WHERE id = ?').get(req.params.id);
   if (!node) return res.status(404).json({ error: '节点不存在' });
   const days = Number(req.query.days) || 7;
-  res.json(getNodeHistory(node.airport_id, node.server, node.port, days));
+  res.json(getNodeHistory(node.server, node.port, days));
 });
 
 router.delete('/:id', (req, res) => {
@@ -80,12 +79,14 @@ router.post('/batch/delete', (req, res) => {
 // latency check for selected nodes (or all)
 router.post('/latency', async (req, res) => {
   const ids = req.body?.ids;
+  const freshMinutes = Number(req.body?.freshMinutes) || 0;
   const rows = ids?.length
-    ? db.prepare(`SELECT id, airport_id, server, port FROM nodes WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids)
-    : db.prepare('SELECT id, airport_id, server, port FROM nodes').all();
-  const results = await pingNodes(rows);
-  recordLatencyResults(rows, results);
-  res.json({ results });
+    ? db.prepare(`SELECT id, server, port, latency, latency_at FROM nodes WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids)
+    : db.prepare('SELECT id, server, port, latency, latency_at FROM nodes').all();
+  // dedupe by physical endpoint: measure each server:port once, fan out to all
+  // duplicate nodes (same server pulled by several accounts).
+  const summary = await pingDedupAndRecord(rows, { freshMinutes });
+  res.json({ results: summary.perNode, total: summary.total, endpoints: summary.endpoints, measured: summary.measured, reused: summary.reused });
 });
 
 export default router;

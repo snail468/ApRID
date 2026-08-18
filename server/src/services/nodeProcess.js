@@ -132,6 +132,43 @@ export function applyGlobalPrefix(nodes, prefix) {
   return nodes.map((n) => ({ ...n, name: `${prefix}${n.name}` }));
 }
 
+// ---- physical-endpoint identity + deduped latency planning ----
+// Latency (TCP-handshake RTT) is a property of the physical endpoint server:port,
+// independent of which airport/account imported the node or which protocol it
+// speaks. So every latency lookup keys on this. Exact match (same as the rest of
+// the codebase) — duplicate nodes from the same source carry identical strings.
+export function endpointKey(server, port) {
+  return `${server}:${port}`;
+}
+
+// Plan a deduped latency sweep: group node rows by physical endpoint so each
+// endpoint is measured at most once. When freshMs > 0, an endpoint whose newest
+// existing reading is within the window is reused instead of re-measured. Pure —
+// the caller does the actual pinging + DB writes.
+// rows: [{ id, server, port, latency, latency_at }]
+export function planLatencyChecks(rows, { now = Date.now(), freshMs = 0 } = {}) {
+  const groups = new Map(); // key -> { server, port, ids:[], lastAt, lastLatency }
+  for (const r of rows) {
+    const key = endpointKey(r.server, r.port);
+    let g = groups.get(key);
+    if (!g) { g = { server: r.server, port: r.port, ids: [], lastAt: null, lastLatency: null }; groups.set(key, g); }
+    g.ids.push(r.id);
+    if (r.latency_at != null && r.latency != null && (g.lastAt == null || r.latency_at > g.lastAt)) {
+      g.lastAt = r.latency_at; g.lastLatency = r.latency;
+    }
+  }
+  const toMeasure = []; // [{ key, server, port }] — endpoints to actually ping
+  const reused = [];    // [{ key, latency }] — endpoints reused from a fresh reading
+  for (const [key, g] of groups) {
+    if (freshMs > 0 && g.lastAt != null && g.lastLatency != null && (now - g.lastAt) <= freshMs) {
+      reused.push({ key, latency: g.lastLatency });
+    } else {
+      toMeasure.push({ key, server: g.server, port: g.port });
+    }
+  }
+  return { groups, toMeasure, reused };
+}
+
 // ---- health-based ordering (pure; stats come from nodeHealth.getNodeStatsMap) ----
 // Sortable score, higher = healthier. Falls back to the node's live `latency`
 // when there is no history. Buckets so order is: alive-fast > alive-slow >

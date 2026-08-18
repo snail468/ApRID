@@ -1,6 +1,6 @@
 // Self-contained logic tests (no DB / no network) — run in CI via `npm test`.
 import { parseSubscription, parseUri, parseUserInfo } from '../src/services/nodeParser.js';
-import { processAirportNodes, filterNodes, nodeHealthScore, orderByHealth, previewFilter } from '../src/services/nodeProcess.js';
+import { processAirportNodes, filterNodes, nodeHealthScore, orderByHealth, previewFilter, planLatencyChecks, endpointKey } from '../src/services/nodeProcess.js';
 import { toBase64, toClash, toSingbox, toSurge, toQuanX, toLoon, detectFormat } from '../src/services/subscription/converters.js';
 import { DEFAULT_TEMPLATES } from '../src/services/subscription/defaultTemplates.js';
 import { accumulateUsed } from '../src/services/util.js';
@@ -233,6 +233,32 @@ ok(quanRendered.includes('[filter_remote]') && !quanRendered.includes('<PROXY_NA
   // ordering is stable & good-first; untested keeps its input position among peers
   const order = orderByHealth([dead, untested, slow, good], stats).map((n) => n.server);
   ok(order.join(',') === '1.1.1.1,3.3.3.3,9.9.9.9,2.2.2.2', `orderByHealth good-first -> ${order.join(',')}`);
+}
+
+// --- deduped latency planning: one ping per endpoint, fan-out, freshness reuse ---
+{
+  const now = 1_000_000_000_000;
+  // 5 node rows, but only 3 unique endpoints (a & c each imported by 2 accounts)
+  const rows = [
+    { id: 1, server: 'a', port: 443, latency: 80, latency_at: now - 5000 },
+    { id: 2, server: 'a', port: 443, latency: null, latency_at: null },      // dup of #1
+    { id: 3, server: 'b', port: 443, latency: null, latency_at: null },
+    { id: 4, server: 'c', port: 443, latency: 200, latency_at: now - 60 * 60000 }, // 1h old
+    { id: 5, server: 'c', port: 443, latency: null, latency_at: null },      // dup of #4
+  ];
+  ok(endpointKey('a', 443) === 'a:443', 'endpointKey');
+
+  // no freshness: every unique endpoint measured once, all dups grouped
+  const plan = planLatencyChecks(rows, { now, freshMs: 0 });
+  ok(plan.groups.size === 3, `dedup -> 3 endpoints (from 5 rows), got ${plan.groups.size}`);
+  ok(plan.toMeasure.length === 3 && plan.reused.length === 0, 'no freshness: measure all 3');
+  ok(plan.groups.get('a:443').ids.join(',') === '1,2', 'endpoint a fans out to rows 1,2');
+  ok(plan.groups.get('c:443').ids.join(',') === '4,5', 'endpoint c fans out to rows 4,5');
+
+  // freshness 10min: endpoint a (5s old) reused; c (1h old) & b (never) re-measured
+  const plan2 = planLatencyChecks(rows, { now, freshMs: 10 * 60000 });
+  ok(plan2.reused.length === 1 && plan2.reused[0].key === 'a:443' && plan2.reused[0].latency === 80, 'fresh endpoint reused');
+  ok(plan2.toMeasure.map((m) => m.key).sort().join(',') === 'b:443,c:443', `stale/untested measured -> ${plan2.toMeasure.map((m) => m.key).join(',')}`);
 }
 
 // --- rule preview: kept vs dropped-with-reason (mirrors filterNodes order) ---

@@ -13,7 +13,8 @@ const SCHEDULES_KEY = 'automation_schedules';
 export const DEFAULT_SCHEDULES = {
   airport_reset: { enabled: false, cron: '0 4 * * *' },
   traffic_stats: { enabled: false, cron: '0 3 * * *' },
-  latency: { enabled: false, cron: '0 5 * * *', airports: [], cleanup: false },
+  // freshMinutes>0: skip endpoints measured within that window (reuse the reading).
+  latency: { enabled: false, cron: '0 5 * * *', airports: [], cleanup: false, freshMinutes: 0 },
   // 告警的时间驱动条件（到期/即将到期）无事件可挂，只能定期看钟。默认每小时开启，
   // 现在也走交互式 Cron，管理员可自行改。事件驱动条件（超限/机场用量）不受此影响。
   alerts: { enabled: true, cron: '0 * * * *' },
@@ -22,7 +23,7 @@ export const DEFAULT_SCHEDULES = {
 const RUNNERS = {
   airport_reset: runAllAirportResets,
   traffic_stats: () => runTrafficStats({ refetch: true }),
-  latency: () => runLatencyCheck(getSchedules().latency.airports, { cleanup: getSchedules().latency.cleanup }),
+  latency: () => runLatencyCheck(getSchedules().latency.airports, { cleanup: getSchedules().latency.cleanup, freshMinutes: getSchedules().latency.freshMinutes || 0 }),
   alerts: () => runAlertCheck({ recordEmpty: false }),
 };
 

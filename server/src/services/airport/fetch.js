@@ -5,6 +5,7 @@ import { processAirportNodes, combineExclude } from '../nodeProcess.js';
 import { detectChallenge, ANTIBOT_HINT } from './antibot.js';
 import { accumulateUsed } from '../util.js';
 import { maybeSendAirportAlert } from '../alerts.js';
+import { latestLatencyByEndpoint } from '../nodeHealth.js';
 
 export const DEFAULT_UA = 'ClashMetaForAndroid/2.10.1.Meta';
 
@@ -84,11 +85,16 @@ async function doFetchAirport(airportId, ap) {
   }
 
   const now = Date.now();
+  // Cross-airport latency reuse: the freshest reading per endpoint across ALL
+  // airports, computed before we touch this airport's rows. Lets a node imported
+  // by another account inherit a latency already measured elsewhere — no re-detect.
+  const globalLatency = latestLatencyByEndpoint();
   const tx = db.transaction(() => {
     // Carry the last latency reading across the delete+reinsert: a re-pull would
     // otherwise reset every node's latency to NULL (so 节点管理 showed "-" after
-    // any fetch). Match on server:port, which is stable across re-pulls even when
-    // names/ids change.
+    // any fetch). Prefer this airport's own last reading, then fall back to any
+    // other airport's reading for the same endpoint. Keyed on server:port, which
+    // is stable across re-pulls even when names/ids change.
     const prevLatency = new Map(
       db.prepare('SELECT server, port, latency, latency_at FROM nodes WHERE airport_id = ?')
         .all(airportId)
@@ -99,7 +105,8 @@ async function doFetchAirport(airportId, ap) {
       'INSERT INTO nodes (airport_id, name, type, server, port, raw, uri, group_name, latency, latency_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
     );
     for (const n of nodes) {
-      const prev = prevLatency.get(`${n.server}:${n.port}`);
+      const key = `${n.server}:${n.port}`;
+      const prev = prevLatency.get(key) || globalLatency.get(key);
       ins.run(airportId, n.name, n.type, n.server, n.port, JSON.stringify(n.raw || {}), n.uri || '', ap.group_name || '', prev?.latency ?? null, prev?.latency_at ?? null, now);
     }
     db.prepare(

@@ -198,14 +198,15 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   created_at INTEGER NOT NULL
 );
 
--- history of every latency check, one row per node per run. Keyed by
--- (airport_id, server, port) rather than nodes.id because airport refetch
--- deletes+reinserts node rows (new ids) — this key stays stable, so a node's
--- availability/latency history survives re-pulls. Powers 可用率 + 延迟趋势 and
--- the good-node-first ordering when building subscriptions.
+-- history of every latency check, keyed by the physical endpoint (server:port)
+-- rather than nodes.id: latency is an endpoint property, so one row per endpoint
+-- per run is shared by all duplicate nodes across airports/accounts, and history
+-- survives the delete+reinsert that airport refetch does. Powers 可用率 + 延迟趋势
+-- and the good-node-first ordering. (airport_id is legacy/unused — kept nullable
+-- for older rows; new inserts leave it NULL.)
 CREATE TABLE IF NOT EXISTS node_checks (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  airport_id INTEGER,
+  airport_id INTEGER,   -- legacy, unused; new rows are NULL
   server     TEXT,
   port       INTEGER,
   latency    INTEGER,   -- ms, -1 = timeout/unreachable
@@ -218,6 +219,7 @@ CREATE INDEX IF NOT EXISTS idx_sub_logs_user ON sub_logs(user_id, id);
 CREATE INDEX IF NOT EXISTS idx_snap_airport  ON traffic_snapshots(airport_id, ts);
 CREATE INDEX IF NOT EXISTS idx_costs_airport ON airport_costs(airport_id, id);
 CREATE INDEX IF NOT EXISTS idx_node_checks   ON node_checks(airport_id, server, port, ts);
+CREATE INDEX IF NOT EXISTS idx_node_checks_ep ON node_checks(server, port, ts);
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at);
 `);
 

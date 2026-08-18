@@ -20,8 +20,11 @@ export default function Nodes({ toast }) {
     setPinging(true);
     try {
       const ids = t.selected.size ? [...t.selected] : undefined;
-      await API.nodeLatency(ids);
-      toast.success('延迟检测完成'); load(); t.clearSelection();
+      const r = await API.nodeLatency(ids);
+      const msg = r && r.endpoints != null
+        ? `延迟检测完成：${r.total} 节点 → ${r.endpoints} 个唯一端点${r.reused ? `（复用 ${r.reused}）` : ''}`
+        : '延迟检测完成';
+      toast.success(msg); load(); t.clearSelection();
     } catch (e) { toast.error(e.message); }
     finally { setPinging(false); }
   };
