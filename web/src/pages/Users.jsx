@@ -62,6 +62,11 @@ export default function Users({ toast }) {
     try { await API.resetUser(u.id, { triggerAutomation: true }); toast.success('已重置订阅'); load(); }
     catch (e) { toast.error(e.message); }
   };
+  const resetTraffic = async (u) => {
+    if (!(await confirm(`重置「${u.name}」的已用流量为 0（不改到期时间）。确认？`))) return;
+    try { await API.resetUserTraffic(u.id); toast.success('已重置流量'); load(); }
+    catch (e) { toast.error(e.message); }
+  };
   const batchDelete = async () => {
     if (!(await confirm(`删除选中的 ${t.selected.size} 个用户？`))) return;
     await API.batchDeleteUsers([...t.selected]); t.clearSelection(); load();
@@ -149,6 +154,7 @@ export default function Users({ toast }) {
                       <ActionMenu items={[
                         { label: '订阅管理', onClick: () => setSubUser(u) },
                         { label: '续费', title: '延长到期 / 重置本期流量', onClick: () => setRenewUser(u) },
+                        { label: '重置流量', title: '将已用流量清零（不改到期）', onClick: () => resetTraffic(u) },
                         { label: '节点预览', title: '预览客户端可拉取的节点', onClick: () => setPreviewUser(u) },
                         { label: '编辑', onClick: () => setEditing(u) },
                         { label: '重置订阅', title: '旧链接失效并触发机场重置', onClick: () => reset(u) },
@@ -222,6 +228,7 @@ function UserModal({ user, templates, airports, groups, toast, assignedByAirport
     expire_at: toDatetimeLocal(user.expire_at), template_id: user.template_id || '',
     group_name: user.group_name || '', remark: user.remark || '',
     traffic_limit_gb: user.traffic_limit ? (user.traffic_limit / GB) : '',
+    traffic_reset_day: user.traffic_reset_day || '',
     price: user.price ?? '',
     airports: uf.airports || [], include: uf.include || '', exclude: uf.exclude || '', prefix: uf.prefix || '',
     protocols: uf.protocols || [], excludeProtocols: uf.excludeProtocols || [],
@@ -248,6 +255,7 @@ function UserModal({ user, templates, airports, groups, toast, assignedByAirport
       name: f.name, enabled: f.enabled, expire_at: fromDatetimeLocal(f.expire_at),
       template_id: f.template_id || null, group_name: f.group_name, remark: f.remark, node_filter,
       traffic_limit: f.traffic_limit_gb ? Math.round(Number(f.traffic_limit_gb) * GB) : null,
+      traffic_reset_day: f.traffic_reset_day === '' ? null : Number(f.traffic_reset_day),
       price: f.price === '' ? null : Number(f.price),
     };
     try {
@@ -285,6 +293,12 @@ function UserModal({ user, templates, airports, groups, toast, assignedByAirport
       <div className="field-row">
         <div className="field"><label>流量上限 (GB，留空=不限)</label>
           <input type="number" min="0" step="0.1" value={f.traffic_limit_gb} onChange={(e) => set('traffic_limit_gb', e.target.value)} placeholder="如 100" />
+        </div>
+        <div className="field"><label>月流量重置日 (每月几号自动清零)</label>
+          <select value={f.traffic_reset_day} onChange={(e) => set('traffic_reset_day', e.target.value)}>
+            <option value="">不自动重置</option>
+            {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => <option key={d} value={d}>{d} 号</option>)}
+          </select>
         </div>
         <div className="field"><label>收费 (用于收益记账)</label>
           <input type="number" min="0" step="0.01" value={f.price} onChange={(e) => set('price', e.target.value)} placeholder="如 15" />

@@ -164,7 +164,9 @@ export function toClash(nodes, templateContent) {
 }
 
 // ---------------- sing-box (json) ----------------
-function nodeToSingbox(n) {
+// exported so the availability probe (services/probe.js) can build real sing-box
+// outbounds from nodes and dial through them.
+export function nodeToSingbox(n) {
   const r = n.raw || {};
   const tag = n.name;
   switch (n.type) {

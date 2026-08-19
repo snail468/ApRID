@@ -1,13 +1,14 @@
 // Self-contained logic tests (no DB / no network) — run in CI via `npm test`.
 import { parseSubscription, parseUri, parseUserInfo } from '../src/services/nodeParser.js';
-import { processAirportNodes, filterNodes, nodeHealthScore, orderByHealth, previewFilter, planLatencyChecks, endpointKey } from '../src/services/nodeProcess.js';
+import { processAirportNodes, filterNodes, nodeHealthScore, orderByHealth, previewFilter, planLatencyChecks, endpointKey, dedupByEndpoint } from '../src/services/nodeProcess.js';
 import { toBase64, toClash, toSingbox, toSurge, toQuanX, toLoon, detectFormat } from '../src/services/subscription/converters.js';
 import { DEFAULT_TEMPLATES } from '../src/services/subscription/defaultTemplates.js';
-import { accumulateUsed } from '../src/services/util.js';
+import { accumulateUsed, shouldResetToday } from '../src/services/util.js';
 import { signAction, verifyAction } from '../src/services/actionToken.js';
 import { cronMatch, isValidCron, describeCron } from '../src/services/cron.js';
 import { combineExclude, DEFAULT_GLOBAL_EXCLUDE } from '../src/services/nodeProcess.js';
 import { describeAction, sanitizeBody } from '../src/services/auditFormat.js';
+import { nodeSignature, buildProbeConfig, parseDelayResult } from '../src/services/probeFormat.js';
 import { load as yamlLoad } from 'js-yaml';
 
 let pass = 0, fail = 0;
@@ -155,6 +156,24 @@ ok(quanRendered.includes('[filter_remote]') && !quanRendered.includes('<PROXY_NA
   ok(kept.cum === 90 && kept.last === 90, 'accumulateUsed ignores null reading');
 }
 
+// --- monthly traffic reset day (with month-end clamp + same-day dedup) ---
+{
+  const D = (y, mo, d) => new Date(y, mo - 1, d, 12, 0); // local; mo is 1-based
+  ok(shouldResetToday(15, D(2026, 3, 15)) === true, 'reset day = today → due');
+  ok(shouldResetToday(15, D(2026, 3, 14)) === false, 'reset day ≠ today → not due');
+  ok(shouldResetToday(15, D(2026, 3, 15), D(2026, 3, 15)) === false, 'already reset today → skip');
+  ok(shouldResetToday(15, D(2026, 3, 15), D(2026, 2, 15)) === true, 'last reset last month → due');
+  // month-end clamp: 2026 is non-leap so Feb has 28 days
+  ok(shouldResetToday(31, D(2026, 2, 28)) === true, 'day 31 clamps to Feb 28 → due');
+  ok(shouldResetToday(31, D(2026, 2, 27)) === false, 'day 31 not on Feb 27');
+  ok(shouldResetToday(31, D(2026, 1, 31)) === true, 'day 31 on Jan 31 → due');
+  ok(shouldResetToday(30, D(2026, 4, 30)) === true, 'day 30 on Apr 30 → due');
+  // off / invalid
+  ok(shouldResetToday(0, D(2026, 3, 15)) === false, 'day 0 = off');
+  ok(shouldResetToday(null, D(2026, 3, 15)) === false, 'null = off');
+  ok(shouldResetToday(32, D(2026, 3, 15)) === false, 'invalid day 32 = off');
+}
+
 // --- signed action tokens (magic links) ---
 {
   const token = signAction({ t: 'refill', ap: 5 });
@@ -261,6 +280,19 @@ ok(quanRendered.includes('[filter_remote]') && !quanRendered.includes('<PROXY_NA
   ok(plan2.toMeasure.map((m) => m.key).sort().join(',') === 'b:443,c:443', `stale/untested measured -> ${plan2.toMeasure.map((m) => m.key).join(',')}`);
 }
 
+// --- delivery dedup by endpoint (drop identical server:port across accounts) ---
+{
+  const nodes = [
+    { name: 'A-香港', server: 'hk.example.com', port: 443, type: 'vmess' },
+    { name: 'B-香港', server: 'hk.example.com', port: 443, type: 'vmess' }, // dup endpoint (other account)
+    { name: 'C-日本', server: 'jp.example.com', port: 443, type: 'ss' },
+    { name: 'D-香港-8443', server: 'hk.example.com', port: 8443, type: 'vmess' }, // same host, diff port → kept
+  ];
+  const out = dedupByEndpoint(nodes);
+  ok(out.length === 3, `dedupByEndpoint 4→3, got ${out.length}`);
+  ok(out.map((n) => n.name).join(',') === 'A-香港,C-日本,D-香港-8443', `keeps first per endpoint -> ${out.map((n) => n.name).join(',')}`);
+}
+
 // --- rule preview: kept vs dropped-with-reason (mirrors filterNodes order) ---
 {
   const pnodes = [
@@ -302,6 +334,32 @@ ok(quanRendered.includes('[filter_remote]') && !quanRendered.includes('<PROXY_NA
   ok(sanitizeBody({}) === null && sanitizeBody(null) === null && sanitizeBody(Buffer.from('x')) === null, 'sanitizeBody empty/buffer -> null');
   const longStr = sanitizeBody({ content: 'a'.repeat(500) });
   ok(JSON.parse(longStr).content.length <= 301, 'sanitizeBody truncates long strings');
+}
+
+// --- availability probe: signature dedup + sing-box config + delay parsing ---
+{
+  // identical configs share a signature; different uuid → different signature
+  const a = { type: 'vmess', server: 'hk.com', port: 443, raw: { uuid: 'u1', network: 'ws' } };
+  const b = { type: 'vmess', server: 'hk.com', port: 443, raw: { network: 'ws', uuid: 'u1' } }; // key order differs
+  const c = { type: 'vmess', server: 'hk.com', port: 443, raw: { uuid: 'u2', network: 'ws' } };
+  ok(nodeSignature(a) === nodeSignature(b), 'nodeSignature stable regardless of raw key order');
+  ok(nodeSignature(a) !== nodeSignature(c), 'different uuid → different signature');
+  ok(nodeSignature({ ...a, raw: JSON.stringify(a.raw) }) === nodeSignature(a), 'signature accepts stringified raw');
+
+  // probe config: one outbound per node (tagged) + direct + clash api
+  const cfg = buildProbeConfig([
+    { tag: 'p0', node: { type: 'trojan', server: 't.com', port: 443, raw: { password: 'pw', sni: 't.com' } } },
+    { tag: 'p1', node: { type: 'ss', server: 's.com', port: 8388, raw: { cipher: 'aes-256-gcm', password: 'pw' } } },
+  ], 39001);
+  const tags = cfg.outbounds.map((o) => o.tag);
+  ok(tags.includes('p0') && tags.includes('p1') && tags.includes('direct'), `probe config tags -> ${tags.join(',')}`);
+  ok(cfg.experimental.clash_api.external_controller === '127.0.0.1:39001', 'probe config wires clash api port');
+  ok(cfg.outbounds.find((o) => o.tag === 'p0').type === 'trojan', 'probe outbound built from node');
+
+  // delay parsing
+  ok(parseDelayResult(200, { delay: 187 }).ok === true && parseDelayResult(200, { delay: 187 }).ms === 187, 'delay 200 → alive');
+  ok(parseDelayResult(408, { message: 'timeout' }).ok === false && parseDelayResult(408, { message: 'timeout' }).ms === -1, 'delay 408 → dead');
+  ok(parseDelayResult(200, {}).ok === false, 'delay 200 without number → dead');
 }
 
 // --- UA detection ---

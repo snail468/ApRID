@@ -17,6 +17,7 @@ const ACTION_WORD = {
   latency: '延迟检测', restore: '恢复数据库', backup: '备份数据库',
   toggle: '切换启用', group: '分组', delete: '删除', login: '登录',
   'test-reset': '测试重置', 'airport-reset': '机场重置', 'traffic-stats': '流量统计',
+  'reset-traffic': '重置流量', 'traffic-reset': '流量月度重置',
   alerts: '告警检查', 'user-pull': '用户拉取', account: '修改账户', test: '测试',
 };
 

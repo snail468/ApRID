@@ -169,6 +169,23 @@ export function planLatencyChecks(rows, { now = Date.now(), freshMs = 0 } = {}) 
   return { groups, toMeasure, reused };
 }
 
+// Collapse nodes that hit the same physical endpoint (server:port) to a single
+// entry. Several airport accounts often import the same upstream servers, so a
+// user's subscription would otherwise carry many identical lines. Keeps the first
+// occurrence — delivery dedups after the good-nodes-first sort, and all duplicates
+// of one endpoint share the same health, so the survivor is a best-ranked copy.
+export function dedupByEndpoint(nodes) {
+  const seen = new Set();
+  const out = [];
+  for (const n of nodes) {
+    const k = endpointKey(n.server, n.port);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(n);
+  }
+  return out;
+}
+
 // ---- health-based ordering (pure; stats come from nodeHealth.getNodeStatsMap) ----
 // Sortable score, higher = healthier. Falls back to the node's live `latency`
 // when there is no history. Buckets so order is: alive-fast > alive-slow >

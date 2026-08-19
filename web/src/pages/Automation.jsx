@@ -6,13 +6,14 @@ import { invalidate } from '../store.js';
 
 const TASK_LABEL = {
   airport_reset: '机场订阅重置', traffic_stats: '用户流量统计', alerts: '告警检查',
-  latency: '延迟检测', node_fetch: '节点拉取', user_pull: '用户触发拉取',
+  latency: '延迟检测', node_fetch: '节点拉取', user_pull: '用户触发拉取', traffic_reset: '流量月度重置',
 };
 const STATUS_BADGE = { success: 'green', failed: 'red', running: 'blue', pending: 'gray' };
 
 const TABS = [
   { key: 'airport_reset', label: '🔄 机场订阅重置' },
   { key: 'traffic_stats', label: '📊 用户流量统计' },
+  { key: 'traffic_reset', label: '📅 用户流量月度重置' },
   { key: 'alerts', label: '🔔 到期/超限告警' },
   { key: 'latency', label: '📡 节点延迟检测' },
   { key: 'user_pull', label: '📥 用户触发机场拉取' },
@@ -82,6 +83,15 @@ export default function Automation({ toast }) {
       const r = await API.runLatency(latAirports || [], !!latCleanup);
       toast.success(`延迟检测完成：连通 ${r.ok}，超时 ${r.timeout}${latCleanup ? `，清理 ${r.deleted}` : ''}（共 ${r.total}）`);
       invalidate('nodes:');
+    } catch (e) { toast.error(e.message); }
+    finally { setRunning(''); loadTasks(); loadOverview(); }
+  };
+  const runTrafficReset = async () => {
+    setRunning('traffic_reset');
+    try {
+      const r = await API.runTrafficReset();
+      toast.success(`月度重置完成：今天到期 ${r.reset} 个用户已重置（候选 ${r.candidates}）`);
+      invalidate('users');
     } catch (e) { toast.error(e.message); }
     finally { setRunning(''); loadTasks(); loadOverview(); }
   };
@@ -185,6 +195,25 @@ export default function Automation({ toast }) {
             </button>
           </div>
           <TaskLog tasks={tasks} type="traffic_stats" onClear={clearTasks} />
+        </div>
+      )}
+
+      {tab === 'traffic_reset' && (
+        <div className="card">
+          <h3 style={{ marginTop: 0 }}>📅 用户流量月度重置</h3>
+          <p className="muted small">
+            每天清扫一次：把「每月重置日 = 今天」的用户已用流量清零（B−A 重新计）。月末自动裁剪——
+            如设 31 号，在只有 28 天的 2 月会在 28 号触发。每个用户的重置日在<strong>「用户 · 编辑」</strong>里设置，
+            也可在用户列表对单个用户点<strong>「重置流量」</strong>立即清零。
+          </p>
+          <TriggerInfo meta={metaOf('traffic_reset')} />
+          <CronEditor schedule={metaOf('traffic_reset')?.schedule} onSave={(cfg) => saveSchedule('traffic_reset', cfg)} />
+          <div style={{ margin: '12px 0' }}>
+            <button className="btn primary" disabled={running === 'traffic_reset'} onClick={runTrafficReset}>
+              {running === 'traffic_reset' ? <span className="spin" /> : '▶ 立即清扫（仅重置今天到期的用户）'}
+            </button>
+          </div>
+          <TaskLog tasks={tasks} type="traffic_reset" onClear={clearTasks} />
         </div>
       )}
 

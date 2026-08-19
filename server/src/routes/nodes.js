@@ -3,6 +3,7 @@ import { db, getSetting } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
 import { pingDedupAndRecord, getNodeHistory } from '../services/nodeHealth.js';
 import { previewFilter, combineExclude } from '../services/nodeProcess.js';
+import { probeNodes } from '../services/probe.js';
 
 const router = express.Router();
 router.use(requireAuth);
@@ -88,5 +89,26 @@ router.post('/latency', async (req, res) => {
   const summary = await pingDedupAndRecord(rows, { freshMinutes });
   res.json({ results: summary.perNode, total: summary.total, endpoints: summary.endpoints, measured: summary.measured, reused: summary.reused });
 });
+
+// Real availability probe: dial each node through sing-box and fetch a test URL.
+// Verifies the proxy actually works, not just that the port is open.
+router.post('/probe', async (req, res) => {
+  const ids = req.body?.ids;
+  const rows = ids?.length
+    ? db.prepare(`SELECT id, name, type, server, port, raw FROM nodes WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids)
+    : db.prepare('SELECT id, name, type, server, port, raw FROM nodes').all();
+  try {
+    const summary = await probeNodes(rows.map((r) => ({ ...r, raw: safeRaw(r.raw) })));
+    res.json({ ok: true, ...summary });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+function safeRaw(s) {
+  if (!s) return {};
+  if (typeof s === 'object') return s;
+  try { return JSON.parse(s); } catch { return {}; }
+}
 
 export default router;

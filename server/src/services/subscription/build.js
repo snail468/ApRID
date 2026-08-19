@@ -1,6 +1,6 @@
 import { db, getSetting } from '../../db.js';
 import { FORMATS } from './converters.js';
-import { filterNodes, renameNodes, dedupWithinGroup, applyGlobalPrefix, combineExclude } from '../nodeProcess.js';
+import { filterNodes, renameNodes, dedupWithinGroup, applyGlobalPrefix, combineExclude, dedupByEndpoint } from '../nodeProcess.js';
 import { sortNodesByHealth } from '../nodeHealth.js';
 
 // A synthetic single-node subscription used for expired / reset states.
@@ -58,6 +58,10 @@ export function collectUserNodes(user) {
   // delivery so changing it takes effect immediately (no re-pull needed).
   const userFilter = { ...filter, exclude: combineExclude(getSetting('global_node_exclude', ''), filter.exclude) };
   let out = filterNodes(collected, userFilter);
+  // drop duplicate physical endpoints (same server:port pulled by several
+  // accounts) so the subscription isn't full of identical servers. Off when the
+  // admin sets sub_dedup_endpoints=0.
+  if (getSetting('sub_dedup_endpoints', '1') !== '0') out = dedupByEndpoint(out);
   // good nodes first: order by trailing availability + latency before renaming,
   // so healthy nodes sit at the top of the delivered subscription. Off when the
   // admin sets sub_sort_by_health=0. Stable — untested nodes keep import order.

@@ -73,6 +73,24 @@ router.put('/node-exclude', (req, res) => {
   res.json({ ok: true, value: getSetting('global_node_exclude', '') });
 });
 
+// ---- 订阅下发选项（去重 / 好节点优先） ----
+router.get('/delivery', (req, res) => {
+  res.json({
+    dedup: getSetting('sub_dedup_endpoints', '1') !== '0',
+    sortByHealth: getSetting('sub_sort_by_health', '1') !== '0',
+  });
+});
+router.put('/delivery', (req, res) => {
+  const b = req.body || {};
+  if (b.dedup !== undefined) setSetting('sub_dedup_endpoints', b.dedup ? '1' : '0');
+  if (b.sortByHealth !== undefined) setSetting('sub_sort_by_health', b.sortByHealth ? '1' : '0');
+  res.json({
+    ok: true,
+    dedup: getSetting('sub_dedup_endpoints', '1') !== '0',
+    sortByHealth: getSetting('sub_sort_by_health', '1') !== '0',
+  });
+});
+
 // ---- 告警通知配置 ----
 router.get('/notify', (req, res) => res.json(getNotifyConfigMasked()));
 router.put('/notify', (req, res) => {

@@ -1,5 +1,5 @@
 import { getSetting, setSetting } from '../db.js';
-import { runAllAirportResets, runTrafficStats, runAlertCheck, runLatencyCheck } from './automation.js';
+import { runAllAirportResets, runTrafficStats, runAlertCheck, runLatencyCheck, runTrafficReset } from './automation.js';
 import { cronMatch, isValidCron, describeCron } from './cron.js';
 
 // Lightweight in-process scheduler for the automations. Config lives in the
@@ -13,6 +13,10 @@ const SCHEDULES_KEY = 'automation_schedules';
 export const DEFAULT_SCHEDULES = {
   airport_reset: { enabled: false, cron: '0 4 * * *' },
   traffic_stats: { enabled: false, cron: '0 3 * * *' },
+  // daily sweep that resets the traffic counter of users whose monthly reset-day
+  // is today (per-user, set on the user). On by default; harmless when no user
+  // has a reset-day configured.
+  traffic_reset: { enabled: true, cron: '10 0 * * *' },
   // freshMinutes>0: skip endpoints measured within that window (reuse the reading).
   latency: { enabled: false, cron: '0 5 * * *', airports: [], cleanup: false, freshMinutes: 0 },
   // 告警的时间驱动条件（到期/即将到期）无事件可挂，只能定期看钟。默认每小时开启，
@@ -23,6 +27,7 @@ export const DEFAULT_SCHEDULES = {
 const RUNNERS = {
   airport_reset: runAllAirportResets,
   traffic_stats: () => runTrafficStats({ refetch: true }),
+  traffic_reset: () => runTrafficReset(),
   latency: () => runLatencyCheck(getSchedules().latency.airports, { cleanup: getSchedules().latency.cleanup, freshMinutes: getSchedules().latency.freshMinutes || 0 }),
   alerts: () => runAlertCheck({ recordEmpty: false }),
 };

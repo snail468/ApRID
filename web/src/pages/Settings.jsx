@@ -16,6 +16,7 @@ export default function Settings({ toast, onAccountChange }) {
         <PlansCard toast={toast} />
         <NotifyCard toast={toast} />
         <NodeExcludeCard toast={toast} />
+        <DeliveryCard toast={toast} />
         <BackupCard toast={toast} />
         <TwoFACard settings={settings} toast={toast} reload={load} />
         <DevicesCard toast={toast} />
@@ -173,6 +174,34 @@ function NodeExcludeCard({ toast }) {
         <button className="btn primary" onClick={save} disabled={saving}>{saving ? <span className="spin" /> : '保存'}</button>
         <button className="btn" onClick={() => setValue(def)} title="恢复内置默认排除词">恢复默认</button>
       </div>
+    </div>
+  );
+}
+
+function DeliveryCard({ toast }) {
+  const [cfg, setCfg] = useState(null);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { API.getDelivery().then(setCfg).catch((e) => toast.error(e.message)); }, [toast]);
+  if (!cfg) return <div className="card"><h3 style={{ marginTop: 0 }}>📦 订阅下发</h3><div className="muted small"><span className="spin" /></div></div>;
+
+  const save = async (patch) => {
+    setSaving(true);
+    try { const r = await API.saveDelivery(patch); setCfg(r); toast.success('已保存'); }
+    catch (e) { toast.error(e.message); } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="card">
+      <h3 style={{ marginTop: 0 }}>📦 订阅下发</h3>
+      <p className="muted small">下发给用户订阅时的处理选项。改动即时生效（下次拉取订阅时应用）。</p>
+      <label className="checkbox-inline" style={{ marginBottom: 8 }}>
+        <input type="checkbox" checked={cfg.dedup} disabled={saving} onChange={(e) => save({ dedup: e.target.checked })} />
+        <span>按端点去重：同一 <code>服务器:端口</code> 只保留一个，剔除多账号导入的重复节点</span>
+      </label>
+      <label className="checkbox-inline">
+        <input type="checkbox" checked={cfg.sortByHealth} disabled={saving} onChange={(e) => save({ sortByHealth: e.target.checked })} />
+        <span>好节点优先：按可用率/延迟把健康节点排在订阅前面</span>
+      </label>
     </div>
   );
 }

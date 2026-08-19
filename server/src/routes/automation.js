@@ -1,7 +1,7 @@
 import express from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
-import { runAirportReset, runAllAirportResets, runTrafficStats, runAlertCheck, runLatencyCheck, runUserPullAll } from '../services/automation.js';
+import { runAirportReset, runAllAirportResets, runTrafficStats, runAlertCheck, runLatencyCheck, runUserPullAll, runTrafficReset } from '../services/automation.js';
 import { testAirportConnection } from '../services/airport/adapters.js';
 import { getSchedules, setSchedules, describeSchedule } from '../services/scheduler.js';
 
@@ -45,6 +45,18 @@ router.get('/', (req, res) => {
         autoTriggers: [],
         schedule: schedules.latency,
         scheduleText: describeSchedule(schedules.latency),
+      },
+      {
+        key: 'traffic_reset',
+        name: '用户流量月度重置',
+        last: last('traffic_reset'),
+        manual: true,
+        autoTriggers: [
+          '每日清扫：给「每月重置日」= 今天的用户把已用流量清零（月末自动裁剪，如 31 号在 2 月按 28/29 号）',
+          '每个用户的重置日在「用户 · 编辑」里设置；也可在用户列表对单个用户「重置流量」',
+        ],
+        schedule: schedules.traffic_reset,
+        scheduleText: describeSchedule(schedules.traffic_reset),
       },
       {
         key: 'alerts',
@@ -136,6 +148,17 @@ router.post('/latency', async (req, res) => {
   try {
     const airports = Array.isArray(req.body?.airports) ? req.body.airports : [];
     const r = await runLatencyCheck(airports, { cleanup: !!req.body?.cleanup });
+    res.json({ ok: true, ...r });
+  } catch (err) {
+    res.status(400).json({ error: err.message, taskId: err.taskId });
+  }
+});
+
+// Run "用户流量月度重置" sweep now (only users whose reset-day is today; records a
+// task even if nothing is due).
+router.post('/traffic-reset', async (req, res) => {
+  try {
+    const r = await runTrafficReset({ recordEmpty: true });
     res.json({ ok: true, ...r });
   } catch (err) {
     res.status(400).json({ error: err.message, taskId: err.taskId });

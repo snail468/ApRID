@@ -33,6 +33,13 @@ export const config = {
   // Optional captcha-solver placeholder (not wired yet — reserved interface).
   captchaProvider: process.env.CAPTCHA_PROVIDER || '',   // e.g. 'capsolver' | 'yescaptcha'
   captchaApiKey: process.env.CAPTCHA_API_KEY || '',
+  // Real node-availability probe: dials each node *through* a sing-box core and
+  // fetches a test URL, so it verifies the proxy actually works (not just that the
+  // TCP port is open). Needs the sing-box binary; bundled in the Docker image.
+  // Gracefully degrades — the probe endpoint reports when it's unavailable.
+  singboxPath: process.env.SINGBOX_PATH || 'sing-box',
+  probeTestUrl: process.env.PROBE_TEST_URL || 'http://cp.cloudflare.com/generate_204',
+  probeTimeout: parseInt(process.env.PROBE_TIMEOUT || '8000', 10),
 };
 
 // resolve the public base url for a given request (fallback to Host header)

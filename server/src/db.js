@@ -74,8 +74,11 @@ CREATE TABLE IF NOT EXISTS nodes (
   raw         TEXT,        -- JSON of parsed params
   uri         TEXT,        -- original share uri if any
   group_name  TEXT,
-  latency     INTEGER,     -- ms, -1 = timeout/unknown
+  latency     INTEGER,     -- ms, -1 = timeout/unknown (TCP handshake RTT)
   latency_at  INTEGER,
+  alive       INTEGER,     -- real through-proxy probe: 1 ok, 0 dead, null untested
+  alive_ms    INTEGER,     -- proxy latency to the test URL (ms) when alive
+  alive_at    INTEGER,
   created_at  INTEGER NOT NULL,
   FOREIGN KEY (airport_id) REFERENCES airports(id) ON DELETE CASCADE
 );
@@ -275,6 +278,13 @@ ensureColumns('users', {
   last_sub_at: 'INTEGER', // last time the user pulled their panel subscription
   sec_alert_at: 'INTEGER', // last security (multi-IP) alert time, for dedup
   price: 'REAL',           // charge for this user, for 成本/收益记账
+  // monthly traffic auto-reset: day-of-month 1–31 (null/0 = off), and the last
+  // time the traffic counter was reset (manual or auto), for the daily sweep dedup.
+  traffic_reset_day: 'INTEGER', traffic_reset_at: 'INTEGER',
+});
+ensureColumns('nodes', {
+  // real through-proxy availability probe results (see services/probe.js)
+  alive: 'INTEGER', alive_ms: 'INTEGER', alive_at: 'INTEGER',
 });
 
 // Seed the cumulative-traffic baseline on existing rows so the monotonic counter

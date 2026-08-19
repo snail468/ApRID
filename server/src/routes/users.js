@@ -5,12 +5,12 @@ import { requireAuth } from '../middleware/auth.js';
 import { config, resolveBaseUrl } from '../config.js';
 import { userStatus, collectUserNodes } from '../services/subscription/build.js';
 import { FORMATS } from '../services/subscription/converters.js';
-import { runUserTriggeredReset } from '../services/automation.js';
+import { runUserTriggeredReset, resetUserTraffic } from '../services/automation.js';
 
 const router = express.Router();
 router.use(requireAuth);
 
-const FIELDS = ['name', 'enabled', 'expire_at', 'template_id', 'group_name', 'remark', 'node_filter', 'traffic_limit', 'price'];
+const FIELDS = ['name', 'enabled', 'expire_at', 'template_id', 'group_name', 'remark', 'node_filter', 'traffic_limit', 'price', 'traffic_reset_day'];
 
 function normalize(body) {
   const out = {};
@@ -18,6 +18,10 @@ function normalize(body) {
     if (body[f] === undefined) continue;
     if (f === 'node_filter') out[f] = typeof body[f] === 'string' ? body[f] : JSON.stringify(body[f] || {});
     else if (f === 'enabled') out[f] = body[f] ? 1 : 0;
+    else if (f === 'traffic_reset_day') {
+      const d = parseInt(body[f], 10);
+      out[f] = Number.isInteger(d) && d >= 1 && d <= 31 ? d : null; // 0/空/越界 = 不自动重置
+    }
     else out[f] = body[f];
   }
   return out;
@@ -164,6 +168,16 @@ router.post('/:id/renew', (req, res) => {
   db.prepare('INSERT INTO renewals (user_id, plan_name, days, price, before_expire, after_expire, created_at) VALUES (?,?,?,?,?,?,?)')
     .run(u.id, plan?.name || (addDays ? `${addDays}天` : '手动'), addDays, newPrice ?? null, u.expire_at || null, after, now);
 
+  res.json(decorate(db.prepare('SELECT * FROM users WHERE id = ?').get(u.id)));
+});
+
+// Reset this user's traffic counter now (rebaseline B−A to 0), without touching
+// expiry. Separate from renew (which also extends expiry) and from the monthly
+// auto-reset. Re-enables re-alerting for the fresh cycle.
+router.post('/:id/reset-traffic', (req, res) => {
+  const u = db.prepare('SELECT id FROM users WHERE id = ?').get(req.params.id);
+  if (!u) return res.status(404).json({ error: '用户不存在' });
+  resetUserTraffic(u.id);
   res.json(decorate(db.prepare('SELECT * FROM users WHERE id = ?').get(u.id)));
 });
 

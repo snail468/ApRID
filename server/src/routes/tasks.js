@@ -21,7 +21,7 @@ export function decorateTaskRows(rows) {
       } else {
         ref_name = users.get(t.ref_id) || null;
       }
-    } else if (t.type === 'traffic_stats') {
+    } else if (t.type === 'traffic_stats' || t.type === 'traffic_reset') {
       ref_name = '全部启用用户';
     }
     return { ...t, ref_name };

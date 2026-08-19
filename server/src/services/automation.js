@@ -1,7 +1,7 @@
 import { db } from '../db.js';
 import { resetAirportSubscription } from './airport/adapters.js';
 import { fetchAirport } from './airport/fetch.js';
-import { fmtBytes } from './util.js';
+import { fmtBytes, shouldResetToday } from './util.js';
 import { maybeSendUserAlert, maybeSendAirportAlert, maybeSendUserSecurityAlert } from './alerts.js';
 import { pingDedupAndRecord } from './nodeHealth.js';
 
@@ -164,6 +164,44 @@ export async function runTrafficStats({ refetch = true } = {}) {
     finishTask(taskId, 'failed');
     throw Object.assign(err, { taskId });
   }
+}
+
+// Reset a single user's traffic counter: rebaseline (traffic_base = NULL so the
+// next 流量统计 re-establishes A = current usage, used = 0), zero the measured
+// usage immediately, stamp traffic_reset_at, and clear the exhaustion/expiry
+// alert dedup so the fresh cycle can re-alert. Shared by the manual button and
+// the monthly auto-reset sweep. Returns true if a row changed.
+export function resetUserTraffic(userId) {
+  const now = Date.now();
+  const info = db.prepare(
+    `UPDATE users SET traffic_base = NULL, traffic_used = 0, traffic_updated_at = ?,
+       traffic_reset_at = ?, alert_key = NULL, alert_at = NULL WHERE id = ?`
+  ).run(now, now, userId);
+  return info.changes > 0;
+}
+
+// "月流量自动重置" —— 每日清扫。对每个设置了 traffic_reset_day 且今天到期(按月长
+// 裁剪，见 shouldResetToday)且今天尚未重置过的用户，把其流量计数清零。recordEmpty=true
+// 时即使 0 命中也留一条任务记录（手动运行用），后台定时则静默跳过。
+export async function runTrafficReset({ recordEmpty = false } = {}) {
+  const now = Date.now();
+  const nowDate = new Date(now);
+  const users = db.prepare(
+    'SELECT id, name, traffic_reset_day, traffic_reset_at FROM users WHERE traffic_reset_day IS NOT NULL AND traffic_reset_day BETWEEN 1 AND 31'
+  ).all();
+  const due = users.filter((u) =>
+    shouldResetToday(u.traffic_reset_day, nowDate, u.traffic_reset_at ? new Date(u.traffic_reset_at) : null));
+  if (!due.length && !recordEmpty) return { taskId: null, reset: 0, candidates: users.length };
+
+  const taskId = createTask('traffic_reset', null);
+  appendLog(taskId, `月流量自动重置检查：今天 ${nowDate.getMonth() + 1}月${nowDate.getDate()}日，设了重置日的用户 ${users.length} 个，今天到期 ${due.length} 个`);
+  for (const u of due) {
+    resetUserTraffic(u.id);
+    appendLog(taskId, `用户「${u.name}」流量已重置（每月 ${u.traffic_reset_day} 号）`);
+  }
+  appendLog(taskId, `完成：重置 ${due.length} 个用户`);
+  finishTask(taskId, 'success');
+  return { taskId, reset: due.length, candidates: users.length };
 }
 
 // "到期/超限告警" —— 周期全量扫描（时间驱动条件如到期/即将到期无事件可挂，只能定期看钟）。

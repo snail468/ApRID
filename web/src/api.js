@@ -48,6 +48,9 @@ export const API = {
   // 全局节点排除
   getNodeExclude: () => api.get('/api/settings/node-exclude'),
   saveNodeExclude: (value) => api.put('/api/settings/node-exclude', { value }),
+  // 订阅下发选项
+  getDelivery: () => api.get('/api/settings/delivery'),
+  saveDelivery: (b) => api.put('/api/settings/delivery', b),
   // 备份 / 恢复
   backupUrl: '/api/settings/backup',
   restoreDb: (file) => fetch('/api/settings/restore', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/octet-stream' }, body: file })
@@ -69,6 +72,7 @@ export const API = {
   runAlerts: () => api.post('/api/automation/alerts', {}),
   runLatency: (airports, cleanup) => api.post('/api/automation/latency', { airports: airports || [], cleanup: !!cleanup }),
   runUserPull: () => api.post('/api/automation/user-pull', {}),
+  runTrafficReset: () => api.post('/api/automation/traffic-reset', {}),
   saveSchedules: (schedules) => api.put('/api/automation/schedule', { schedules }),
   testAirportReset: (airportId) => api.post('/api/automation/test-reset', { airportId }),
   // airports
@@ -92,6 +96,7 @@ export const API = {
   deleteNode: (id) => api.del(`/api/nodes/${id}`),
   batchDeleteNodes: (ids) => api.post('/api/nodes/batch/delete', { ids }),
   nodeLatency: (ids) => api.post('/api/nodes/latency', { ids }),
+  nodeProbe: (ids) => api.post('/api/nodes/probe', { ids }),
   nodeHistory: (id, days = 7) => api.get(`/api/nodes/${id}/history?days=${days}`),
   previewNodes: (b) => api.post('/api/nodes/preview', b),
   // users
@@ -106,6 +111,7 @@ export const API = {
   userSubLogs: (id) => api.get(`/api/users/${id}/sub-logs`),
   userPreview: (id) => api.get(`/api/users/${id}/preview`),
   resetUser: (id, b) => api.post(`/api/users/${id}/reset`, b),
+  resetUserTraffic: (id) => api.post(`/api/users/${id}/reset-traffic`),
   renewUser: (id, b) => api.post(`/api/users/${id}/renew`, b),
   userRenewals: (id) => api.get(`/api/users/${id}/renewals`),
   // templates

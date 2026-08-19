@@ -8,6 +8,7 @@ export default function Nodes({ toast }) {
   const { data: rows = [], loading, refresh } = useCachedResource('nodes:', () => API.nodes());
   const { data: airports = [] } = useCachedResource('airports', () => API.airports());
   const [pinging, setPinging] = useState(false);
+  const [probing, setProbing] = useState(false);
   const [trendNode, setTrendNode] = useState(null);
   const [confirm, confirmNode] = useConfirm();
 
@@ -27,6 +28,17 @@ export default function Nodes({ toast }) {
       toast.success(msg); load(); t.clearSelection();
     } catch (e) { toast.error(e.message); }
     finally { setPinging(false); }
+  };
+  const probeAll = async () => {
+    setProbing(true);
+    try {
+      const ids = t.selected.size ? [...t.selected] : undefined;
+      const r = await API.nodeProbe(ids);
+      let msg = `可用性检测完成：连通 ${r.alive}，不通 ${r.dead}`;
+      if (r.untestable) msg += `，${r.untestable} 个协议不支持`;
+      toast.success(msg); load(); t.clearSelection();
+    } catch (e) { toast.error(e.message); }
+    finally { setProbing(false); }
   };
   const del = async (id) => { if (await confirm('删除该节点？')) { await API.deleteNode(id); load(); } };
   const batchDelete = async () => {
@@ -48,7 +60,10 @@ export default function Nodes({ toast }) {
           {protocols.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
         <div className="spacer" />
-        <button className="btn sm" onClick={pingAll} disabled={pinging}>{pinging ? <span className="spin" /> : (t.selected.size ? `检测选中(${t.selected.size})` : '检测全部延迟')}</button>
+        <button className="btn sm" onClick={pingAll} disabled={pinging || probing}>{pinging ? <span className="spin" /> : (t.selected.size ? `延迟(${t.selected.size})` : '检测全部延迟')}</button>
+        <button className="btn sm" onClick={probeAll} disabled={pinging || probing} title="通过 sing-box 真实连接测试可用性（非仅端口连通）">
+          {probing ? <span className="spin" /> : (t.selected.size ? `可用性(${t.selected.size})` : '可用性检测')}
+        </button>
         {t.selected.size > 0 && <button className="btn sm danger" onClick={batchDelete}>批量删除</button>}
       </div>
 
@@ -66,6 +81,7 @@ export default function Nodes({ toast }) {
                   <SortTh label="端口" k="port" table={t} />
                   <SortTh label="所属机场" k="airport_name" table={t} />
                   <SortTh label="延迟" k="latency" table={t} />
+                  <th className="nosort" title="通过 sing-box 真实连接的可用性">可用性</th>
                   <th className="nosort" title="近7天检测的连通率">可用率</th>
                   <th className="nosort">操作</th>
                 </tr>
@@ -80,6 +96,7 @@ export default function Nodes({ toast }) {
                     <td>{n.port}</td>
                     <td className="small">{n.airport_name || '-'}{n.airport_account ? <span className="muted"> / {n.airport_account}</span> : ''}</td>
                     <td>{latencyCell(n.latency, n.latency_at)}</td>
+                    <td>{aliveCell(n.alive, n.alive_ms, n.alive_at)}</td>
                     <td>{uptimeCell(n.check_ok, n.check_total)}</td>
                     <td className="actions">
                       <button className="btn sm" onClick={() => setTrendNode(n)}>趋势</button>
@@ -99,6 +116,7 @@ export default function Nodes({ toast }) {
             <div className="mrow"><span className="k">服务器</span><span className="mono small">{n.server}:{n.port}</span></div>
             <div className="mrow"><span className="k">机场</span><span>{n.airport_name}</span></div>
             <div className="mrow"><span className="k">延迟</span>{latencyCell(n.latency, n.latency_at)}</div>
+            <div className="mrow"><span className="k">可用性</span>{aliveCell(n.alive, n.alive_ms, n.alive_at)}</div>
             <div className="mrow"><span className="k">可用率</span>{uptimeCell(n.check_ok, n.check_total)}</div>
             <div className="mrow"><span className="k" /><button className="btn sm" onClick={() => setTrendNode(n)}>延迟趋势</button></div>
           </div>
@@ -123,6 +141,16 @@ function uptimeCell(ok, total) {
   const pct = Math.round((ok / total) * 100);
   const cls = pct >= 95 ? 'green' : pct >= 80 ? 'yellow' : 'red';
   return <span className={`badge ${cls}`} title={`近7天 ${ok}/${total} 次连通`}>{pct}%</span>;
+}
+
+// real through-proxy availability (from the sing-box probe)
+function aliveCell(alive, ms, at) {
+  if (alive == null) return <span className="muted">-</span>;
+  const title = at ? `实连检测于 ${fmtDateTime(at)}` : undefined;
+  if (!alive) return <span className="badge red" title={title}>不通</span>;
+  const label = ms != null && ms >= 0 ? `可用 ${ms}ms` : '可用';
+  const cls = ms != null && ms >= 0 && ms < 800 ? 'green' : 'yellow';
+  return <span className={`badge ${cls}`} title={title}>{label}</span>;
 }
 
 /* ---------------- 延迟趋势 ---------------- */
