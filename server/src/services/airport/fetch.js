@@ -7,6 +7,7 @@ import { accumulateUsed } from '../util.js';
 import { maybeSendAirportAlert } from '../alerts.js';
 import { latestLatencyByEndpoint } from '../nodeHealth.js';
 import { nodeSignature } from '../probeFormat.js';
+import { maybeProbeAirportAfterFetch } from '../probe.js';
 
 export const DEFAULT_UA = 'ClashMetaForAndroid/2.10.1.Meta';
 
@@ -133,6 +134,10 @@ async function doFetchAirport(airportId, ap) {
   // event-driven: usage/expiry just changed → evaluate the airport-side alert
   // (deduped in alerts.js; non-blocking so the pull isn't delayed by notify I/O).
   Promise.resolve().then(() => maybeSendAirportAlert(airportId)).catch(() => {});
+
+  // node set just refreshed → re-verify availability for this airport. Internally
+  // throttled/deduped and fire-and-forget, so it never delays this fetch.
+  maybeProbeAirportAfterFetch(airportId);
 
   return { count: nodes.length, traffic: info };
 }

@@ -12,7 +12,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { db } from '../db.js';
+import { db, getSetting } from '../db.js';
 import { config } from '../config.js';
 import { nodeToSingbox } from './subscription/converters.js';
 import { nodeSignature, buildProbeConfig, parseDelayResult, parseUnknownOutboundTypes } from './probeFormat.js';
@@ -209,4 +209,57 @@ export async function probeNodes(rows, { concurrency = 10, timeout = config.prob
 
 export function singboxConfigured() {
   return !!config.singboxPath;
+}
+
+// ---- auto-probe after an airport fetch --------------------------------------
+// Every panel fetch (manual / user-pull / scheduled) refreshes an airport's node
+// set and availability drifts over time, so re-verify right after. Fire-and-forget
+// so it never delays the fetch or the subscription response; results just update
+// nodes.alive/alive_ms (feeding 好节点优先 / 不下发不通节点).
+//
+// Throttled/deduped so bursts (batch refetch, traffic-stats) don't spawn a pile of
+// sing-box cores: per-airport in-flight guard, a global concurrency cap, and a
+// freshness cooldown (skip if this airport was probed within the window — read from
+// MAX(alive_at) so it survives restarts). Opt out via setting probe_after_fetch=0.
+const probeAfterFetchInflight = new Set();          // airportIds currently auto-probing
+const PROBE_AFTER_FETCH_COOLDOWN_MS = 30 * 60 * 1000; // don't re-auto-probe an airport within 30 min
+const MAX_CONCURRENT_AUTOPROBE = 2;                 // cap parallel auto-probes (each spawns sing-box)
+let autoProbeDisabled = false;                      // set true once we learn the binary is missing
+
+function parseRaw(s) {
+  if (!s) return {};
+  if (typeof s === 'object') return s;
+  try { return JSON.parse(s); } catch { return {}; }
+}
+
+export function maybeProbeAirportAfterFetch(airportId) {
+  try {
+    if (autoProbeDisabled) return;
+    if (getSetting('probe_after_fetch', '1') === '0') return;         // admin opted out
+    if (probeAfterFetchInflight.has(airportId)) return;               // already probing this airport
+    if (probeAfterFetchInflight.size >= MAX_CONCURRENT_AUTOPROBE) return; // global cap — a later fetch/scheduled probe covers it
+    const last = db.prepare('SELECT MAX(alive_at) AS t FROM nodes WHERE airport_id = ?').get(airportId)?.t;
+    if (last && Date.now() - last < PROBE_AFTER_FETCH_COOLDOWN_MS) return; // probed recently
+    const rows = db.prepare('SELECT id, name, type, server, port, raw FROM nodes WHERE airport_id = ?').all(airportId);
+    if (!rows.length) return;
+
+    probeAfterFetchInflight.add(airportId);
+    // minimal task row so the run shows up in 任务 like the scheduled probe
+    const info = db.prepare('INSERT INTO tasks (type, ref_id, status, log, created_at) VALUES (?,?,?,?,?)')
+      .run('probe', airportId, 'running', `[${new Date().toISOString()}] 拉取后自动可用性检测（机场 #${airportId}）：${rows.length} 个节点\n`, Date.now());
+    const taskId = info.lastInsertRowid;
+    const appendFinish = (status, line) => {
+      const cur = db.prepare('SELECT log FROM tasks WHERE id = ?').get(taskId)?.log || '';
+      db.prepare('UPDATE tasks SET status = ?, log = ?, finished_at = ? WHERE id = ?')
+        .run(status, cur + `[${new Date().toISOString()}] ${line}\n`, Date.now(), taskId);
+    };
+    probeNodes(rows.map((r) => ({ ...r, raw: parseRaw(r.raw) })))
+      .then((r) => appendFinish('success', `完成：连通 ${r.alive}，不通 ${r.dead}${r.untestable ? `，${r.untestable} 个跳过` : ''}`))
+      .catch((err) => {
+        // binary missing → stop trying for this process instead of failing every fetch
+        if (/无法启动 sing-box|sing-box 未能就绪/.test(err.message)) autoProbeDisabled = true;
+        appendFinish('failed', `失败：${err.message}`);
+      })
+      .finally(() => probeAfterFetchInflight.delete(airportId));
+  } catch { /* best-effort: auto-probe must never break a fetch */ }
 }
