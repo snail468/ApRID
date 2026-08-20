@@ -1,5 +1,5 @@
 import { getSetting, setSetting } from '../db.js';
-import { runAllAirportResets, runTrafficStats, runAlertCheck, runLatencyCheck, runTrafficReset } from './automation.js';
+import { runAllAirportResets, runTrafficStats, runAlertCheck, runLatencyCheck, runTrafficReset, runProbeCheck, runZombieCleanup } from './automation.js';
 import { cronMatch, isValidCron, describeCron } from './cron.js';
 
 // Lightweight in-process scheduler for the automations. Config lives in the
@@ -19,6 +19,10 @@ export const DEFAULT_SCHEDULES = {
   traffic_reset: { enabled: true, cron: '10 0 * * *' },
   // freshMinutes>0: skip endpoints measured within that window (reuse the reading).
   latency: { enabled: false, cron: '0 5 * * *', airports: [], cleanup: false, freshMinutes: 0 },
+  // 真实可用性检测（sing-box 实连），按机场范围（空=全部）。默认关闭（需 sing-box）。
+  probe: { enabled: false, cron: '0 6 * * *', airports: [] },
+  // 僵尸用户清理：到期后 disableDays 天自动停用、deleteDays 天自动删除（0=关闭该动作）。
+  zombie_cleanup: { enabled: false, cron: '30 0 * * *', disableDays: 0, deleteDays: 0 },
   // 告警的时间驱动条件（到期/即将到期）无事件可挂，只能定期看钟。默认每小时开启，
   // 现在也走交互式 Cron，管理员可自行改。事件驱动条件（超限/机场用量）不受此影响。
   alerts: { enabled: true, cron: '0 * * * *' },
@@ -29,6 +33,8 @@ const RUNNERS = {
   traffic_stats: () => runTrafficStats({ refetch: true }),
   traffic_reset: () => runTrafficReset(),
   latency: () => runLatencyCheck(getSchedules().latency.airports, { cleanup: getSchedules().latency.cleanup, freshMinutes: getSchedules().latency.freshMinutes || 0 }),
+  probe: () => runProbeCheck(getSchedules().probe.airports),
+  zombie_cleanup: () => runZombieCleanup(getSchedules().zombie_cleanup),
   alerts: () => runAlertCheck({ recordEmpty: false }),
 };
 
@@ -63,8 +69,16 @@ export function getSchedules() {
       cron,
       lastRun: Number(getSetting(`schedule_last_${key}`, 0)) || 0,
     };
-    if ('airports' in def) out[key].airports = Array.isArray(s.airports) ? s.airports : def.airports;
-    if ('cleanup' in def) out[key].cleanup = s.cleanup != null ? !!s.cleanup : !!def.cleanup;
+    // carry any extra per-automation config keys (airports/cleanup/freshMinutes/
+    // disableDays/…), coercing by the default value's type.
+    for (const [k, dv] of Object.entries(def)) {
+      if (k === 'enabled' || k === 'cron') continue;
+      const sv = s[k];
+      if (Array.isArray(dv)) out[key][k] = Array.isArray(sv) ? sv : dv;
+      else if (typeof dv === 'boolean') out[key][k] = sv != null ? !!sv : dv;
+      else if (typeof dv === 'number') out[key][k] = (sv != null && sv !== '') ? Number(sv) : dv;
+      else out[key][k] = sv != null ? sv : dv;
+    }
   }
   return out;
 }
@@ -76,10 +90,14 @@ export function setSchedules(input = {}) {
     const s = { ...cur[key], ...(input[key] || {}) };
     const cron = isValidCron(s.cron) ? s.cron.trim() : def.cron;
     merged[key] = { enabled: !!s.enabled, cron };
-    if ('airports' in def) {
-      merged[key].airports = Array.isArray(s.airports) ? s.airports.map(Number).filter((n) => !Number.isNaN(n)) : [];
+    for (const [k, dv] of Object.entries(def)) {
+      if (k === 'enabled' || k === 'cron') continue;
+      const sv = s[k];
+      if (Array.isArray(dv)) merged[key][k] = Array.isArray(sv) ? sv.map(Number).filter((n) => !Number.isNaN(n)) : [];
+      else if (typeof dv === 'boolean') merged[key][k] = !!sv;
+      else if (typeof dv === 'number') merged[key][k] = (sv != null && sv !== '') ? Number(sv) : dv;
+      else merged[key][k] = sv != null ? sv : dv;
     }
-    if ('cleanup' in def) merged[key].cleanup = !!s.cleanup;
   }
   setSetting(SCHEDULES_KEY, JSON.stringify(merged));
   return getSchedules();

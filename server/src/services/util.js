@@ -26,6 +26,26 @@ export function shouldResetToday(resetDay, nowDate, lastResetDate = null) {
   return true;
 }
 
+// Normalize the optional secret admin-panel path. Allows a single URL segment of
+// [A-Za-z0-9_-] (1–64 chars); anything else (empty, slashes, dots) → '' meaning
+// "no hidden path, serve at root". Pure/testable.
+export function sanitizeAdminSlug(v) {
+  const s = String(v ?? '').trim().replace(/^\/+|\/+$/g, '');
+  return /^[A-Za-z0-9_-]{1,64}$/.test(s) ? s : '';
+}
+
+// Decide what the zombie-cleanup sweep should do with an expired user. Returns
+// 'delete' | 'disable' | null. Delete takes precedence. Thresholds of 0 disable
+// that action. Pure/testable.
+export function classifyZombie(expireAt, enabled, now, { disableDays = 0, deleteDays = 0 } = {}) {
+  const exp = Number(expireAt);
+  if (!exp || exp >= now) return null; // no expiry set, or not expired yet
+  const daysExpired = (now - exp) / 86400000;
+  if (deleteDays > 0 && daysExpired >= deleteDays) return 'delete';
+  if (disableDays > 0 && daysExpired >= disableDays && enabled) return 'disable';
+  return null;
+}
+
 // Advance an airport's monotonic cumulative used-traffic counter given a fresh
 // raw reading. Airports periodically reset their reported usage (billing-cycle
 // reset), which makes the raw number *drop*; a naive `current - baseline` would

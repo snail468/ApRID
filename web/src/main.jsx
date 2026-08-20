@@ -7,7 +7,7 @@ import './styles.css';
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <BrowserRouter>
+    <BrowserRouter basename={window.__ADMIN_BASE__ || '/'}>
       <ToastProvider>
         <App />
       </ToastProvider>

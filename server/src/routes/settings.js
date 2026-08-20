@@ -10,6 +10,7 @@ import { config } from '../config.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getNotifyConfigMasked, saveNotifyConfig, unmaskPatch, sendTestNotification } from '../services/notify.js';
 import { DEFAULT_GLOBAL_EXCLUDE } from '../services/nodeProcess.js';
+import { sanitizeAdminSlug } from '../services/util.js';
 
 const router = express.Router();
 router.use(requireAuth);
@@ -71,6 +72,16 @@ router.get('/node-exclude', (req, res) => {
 router.put('/node-exclude', (req, res) => {
   setSetting('global_node_exclude', String(req.body?.value ?? '').trim());
   res.json({ ok: true, value: getSetting('global_node_exclude', '') });
+});
+
+// ---- 隐藏管理入口（自定义面板路径） ----
+router.get('/admin-path', (req, res) => {
+  res.json({ value: sanitizeAdminSlug(getSetting('admin_path', '')) });
+});
+router.put('/admin-path', (req, res) => {
+  const slug = sanitizeAdminSlug(req.body?.value);
+  setSetting('admin_path', slug);
+  res.json({ ok: true, value: slug });
 });
 
 // ---- 订阅下发选项（去重 / 好节点优先） ----

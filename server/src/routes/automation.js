@@ -1,7 +1,7 @@
 import express from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
-import { runAirportReset, runAllAirportResets, runTrafficStats, runAlertCheck, runLatencyCheck, runUserPullAll, runTrafficReset } from '../services/automation.js';
+import { runAirportReset, runAllAirportResets, runTrafficStats, runAlertCheck, runLatencyCheck, runUserPullAll, runTrafficReset, runProbeCheck, runZombieCleanup } from '../services/automation.js';
 import { testAirportConnection } from '../services/airport/adapters.js';
 import { getSchedules, setSchedules, describeSchedule } from '../services/scheduler.js';
 
@@ -45,6 +45,28 @@ router.get('/', (req, res) => {
         autoTriggers: [],
         schedule: schedules.latency,
         scheduleText: describeSchedule(schedules.latency),
+      },
+      {
+        key: 'probe',
+        name: '真实可用性检测',
+        last: last('probe'),
+        manual: true,
+        autoTriggers: [
+          '通过 sing-box 实连测试 URL，验证节点是否真能代理（不止端口连通）；按机场范围（不选=全部）',
+        ],
+        schedule: schedules.probe,
+        scheduleText: describeSchedule(schedules.probe),
+      },
+      {
+        key: 'zombie_cleanup',
+        name: '僵尸用户清理',
+        last: last('zombie_cleanup'),
+        manual: true,
+        autoTriggers: [
+          '用户到期后 N 天自动停用（释放机场账户槽/停止后台处理）、M 天自动删除（回收 token）；阈值 0=关闭该动作',
+        ],
+        schedule: schedules.zombie_cleanup,
+        scheduleText: describeSchedule(schedules.zombie_cleanup),
       },
       {
         key: 'traffic_reset',
@@ -148,6 +170,29 @@ router.post('/latency', async (req, res) => {
   try {
     const airports = Array.isArray(req.body?.airports) ? req.body.airports : [];
     const r = await runLatencyCheck(airports, { cleanup: !!req.body?.cleanup });
+    res.json({ ok: true, ...r });
+  } catch (err) {
+    res.status(400).json({ error: err.message, taskId: err.taskId });
+  }
+});
+
+// Run "真实可用性检测" for the given airports (empty/omitted = all nodes).
+router.post('/probe', async (req, res) => {
+  try {
+    const airports = Array.isArray(req.body?.airports) ? req.body.airports : [];
+    const r = await runProbeCheck(airports);
+    res.json({ ok: true, ...r });
+  } catch (err) {
+    res.status(400).json({ error: err.message, taskId: err.taskId });
+  }
+});
+
+// Run "僵尸用户清理" now using the configured thresholds (records a task even if
+// nothing is due).
+router.post('/zombie-cleanup', async (req, res) => {
+  try {
+    const s = getSchedules().zombie_cleanup;
+    const r = await runZombieCleanup({ disableDays: s.disableDays, deleteDays: s.deleteDays, recordEmpty: true });
     res.json({ ok: true, ...r });
   } catch (err) {
     res.status(400).json({ error: err.message, taskId: err.taskId });

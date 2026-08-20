@@ -51,6 +51,9 @@ export const API = {
   // 订阅下发选项
   getDelivery: () => api.get('/api/settings/delivery'),
   saveDelivery: (b) => api.put('/api/settings/delivery', b),
+  // 隐藏管理入口
+  getAdminPath: () => api.get('/api/settings/admin-path'),
+  saveAdminPath: (value) => api.put('/api/settings/admin-path', { value }),
   // 备份 / 恢复
   backupUrl: '/api/settings/backup',
   restoreDb: (file) => fetch('/api/settings/restore', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/octet-stream' }, body: file })
@@ -73,6 +76,8 @@ export const API = {
   runLatency: (airports, cleanup) => api.post('/api/automation/latency', { airports: airports || [], cleanup: !!cleanup }),
   runUserPull: () => api.post('/api/automation/user-pull', {}),
   runTrafficReset: () => api.post('/api/automation/traffic-reset', {}),
+  runProbeAuto: (airports) => api.post('/api/automation/probe', { airports: airports || [] }),
+  runZombieCleanup: () => api.post('/api/automation/zombie-cleanup', {}),
   saveSchedules: (schedules) => api.put('/api/automation/schedule', { schedules }),
   testAirportReset: (airportId) => api.post('/api/automation/test-reset', { airportId }),
   // airports

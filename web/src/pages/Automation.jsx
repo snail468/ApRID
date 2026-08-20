@@ -7,6 +7,7 @@ import { invalidate } from '../store.js';
 const TASK_LABEL = {
   airport_reset: '机场订阅重置', traffic_stats: '用户流量统计', alerts: '告警检查',
   latency: '延迟检测', node_fetch: '节点拉取', user_pull: '用户触发拉取', traffic_reset: '流量月度重置',
+  probe: '可用性检测', zombie_cleanup: '僵尸用户清理',
 };
 const STATUS_BADGE = { success: 'green', failed: 'red', running: 'blue', pending: 'gray' };
 
@@ -16,6 +17,8 @@ const TABS = [
   { key: 'traffic_reset', label: '📅 用户流量月度重置' },
   { key: 'alerts', label: '🔔 到期/超限告警' },
   { key: 'latency', label: '📡 节点延迟检测' },
+  { key: 'probe', label: '🛰️ 真实可用性检测' },
+  { key: 'zombie_cleanup', label: '🧟 僵尸用户清理' },
   { key: 'user_pull', label: '📥 用户触发机场拉取' },
 ];
 
@@ -31,6 +34,9 @@ export default function Automation({ toast }) {
   const [testResult, setTestResult] = useState({});
   const [latAirports, setLatAirports] = useState(null); // selected airport ids for latency scope
   const [latCleanup, setLatCleanup] = useState(null);   // delete dead nodes after检测
+  const [probeAirports, setProbeAirports] = useState(null); // scope for availability probe
+  const [zombieDisable, setZombieDisable] = useState(null); // days after expiry → disable
+  const [zombieDelete, setZombieDelete] = useState(null);   // days after expiry → delete
   const timer = useRef(null);
 
   const loadTasks = useCallback(() => API.tasks().then(setTasks).catch(() => {}), []);
@@ -39,6 +45,11 @@ export default function Automation({ toast }) {
     const latSched = o.automations.find((x) => x.key === 'latency')?.schedule;
     setLatAirports((cur) => cur ?? (latSched?.airports || []));
     setLatCleanup((cur) => cur ?? !!latSched?.cleanup);
+    const probeSched = o.automations.find((x) => x.key === 'probe')?.schedule;
+    setProbeAirports((cur) => cur ?? (probeSched?.airports || []));
+    const zSched = o.automations.find((x) => x.key === 'zombie_cleanup')?.schedule;
+    setZombieDisable((cur) => cur ?? (zSched?.disableDays ?? 0));
+    setZombieDelete((cur) => cur ?? (zSched?.deleteDays ?? 0));
   }).catch((e) => toast.error(e.message)), [toast]);
 
   useEffect(() => { loadOverview(); loadTasks(); }, [loadOverview, loadTasks]);
@@ -83,6 +94,24 @@ export default function Automation({ toast }) {
       const r = await API.runLatency(latAirports || [], !!latCleanup);
       toast.success(`延迟检测完成：连通 ${r.ok}，超时 ${r.timeout}${latCleanup ? `，清理 ${r.deleted}` : ''}（共 ${r.total}）`);
       invalidate('nodes:');
+    } catch (e) { toast.error(e.message); }
+    finally { setRunning(''); loadTasks(); loadOverview(); }
+  };
+  const runProbe = async () => {
+    setRunning('probe');
+    try {
+      const r = await API.runProbeAuto(probeAirports || []);
+      toast.success(`可用性检测完成：连通 ${r.alive}，不通 ${r.dead}${r.untestable ? `，${r.untestable} 不支持` : ''}`);
+      invalidate('nodes:');
+    } catch (e) { toast.error(e.message); }
+    finally { setRunning(''); loadTasks(); loadOverview(); }
+  };
+  const runZombie = async () => {
+    setRunning('zombie_cleanup');
+    try {
+      const r = await API.runZombieCleanup();
+      toast.success(`僵尸清理完成：停用 ${r.disabled}，删除 ${r.deleted}`);
+      invalidate('users');
     } catch (e) { toast.error(e.message); }
     finally { setRunning(''); loadTasks(); loadOverview(); }
   };
@@ -195,6 +224,81 @@ export default function Automation({ toast }) {
             </button>
           </div>
           <TaskLog tasks={tasks} type="traffic_stats" onClear={clearTasks} />
+        </div>
+      )}
+
+      {tab === 'probe' && (
+        <div className="card">
+          <h3 style={{ marginTop: 0 }}>🛰️ 真实可用性检测</h3>
+          <p className="muted small">
+            通过内置 <strong>sing-box</strong> 实际连接每个节点并请求测试 URL，验证节点是否<strong>真能代理</strong>（区别于「延迟检测」只测端口连通）。
+            结果显示在节点管理的「可用性」列。需要镜像内含 sing-box；缺失时任务会记录清晰原因。
+          </p>
+          <div className="field">
+            <label>检测范围（按机场，不勾=全部）</label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 4px' }}>
+              {airports.length === 0 ? <span className="muted small">暂无机场</span> : airports.map((a) => {
+                const checked = (probeAirports || []).includes(a.id);
+                return (
+                  <label key={a.id} className="checkbox-inline" style={{ marginRight: 14 }}>
+                    <input type="checkbox" checked={checked} onChange={(e) => {
+                      setProbeAirports((cur) => {
+                        const set = new Set(cur || []);
+                        if (e.target.checked) set.add(a.id); else set.delete(a.id);
+                        return [...set];
+                      });
+                    }} />
+                    <span>{a.name}{a.account ? ` / ${a.account}` : ''}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+          <TriggerInfo meta={metaOf('probe')} />
+          <CronEditor schedule={metaOf('probe')?.schedule}
+            onSave={(cfg) => saveSchedule('probe', { ...cfg, airports: probeAirports || [] })} />
+          <div style={{ margin: '12px 0' }}>
+            <button className="btn primary" disabled={running === 'probe'} onClick={runProbe}>
+              {running === 'probe' ? <span className="spin" /> : '▶ 立即检测'}
+            </button>
+            <span className="muted small" style={{ marginLeft: 8 }}>
+              {(probeAirports || []).length ? `范围：${probeAirports.length} 个机场` : '范围：全部节点'}
+            </span>
+          </div>
+          <TaskLog tasks={tasks} type="probe" onClear={clearTasks} />
+        </div>
+      )}
+
+      {tab === 'zombie_cleanup' && (
+        <div className="card">
+          <h3 style={{ marginTop: 0 }}>🧟 僵尸用户清理</h3>
+          <p className="muted small">
+            到期用户虽已拿不到节点，但仍占着机场账户槽位、仍被流量统计/拉取处理。这里在到期后按阈值自动清理：
+            先<strong>停用</strong>（释放槽位、停止后台处理），再<strong>删除</strong>（回收 token、清理其订阅日志/续费记录）。
+            阈值填 <strong>0 表示关闭</strong>该动作。删除不可恢复，请谨慎设置。
+          </p>
+          <div className="field-row">
+            <div className="field">
+              <label>到期 N 天后自动停用（0=不停用）</label>
+              <input type="number" min="0" step="1" value={zombieDisable ?? 0}
+                onChange={(e) => setZombieDisable(Number(e.target.value))} placeholder="如 7" />
+            </div>
+            <div className="field">
+              <label>到期 M 天后自动删除（0=不删除）</label>
+              <input type="number" min="0" step="1" value={zombieDelete ?? 0}
+                onChange={(e) => setZombieDelete(Number(e.target.value))} placeholder="如 30" />
+            </div>
+          </div>
+          <TriggerInfo meta={metaOf('zombie_cleanup')} />
+          <CronEditor schedule={metaOf('zombie_cleanup')?.schedule}
+            onSave={(cfg) => saveSchedule('zombie_cleanup', { ...cfg, disableDays: Number(zombieDisable) || 0, deleteDays: Number(zombieDelete) || 0 })} />
+          <div style={{ margin: '12px 0' }}>
+            <button className="btn primary" disabled={running === 'zombie_cleanup'} onClick={runZombie}>
+              {running === 'zombie_cleanup' ? <span className="spin" /> : '▶ 立即清理'}
+            </button>
+            <span className="muted small" style={{ marginLeft: 8 }}>先保存定时以持久化阈值；立即清理使用已保存的阈值</span>
+          </div>
+          <TaskLog tasks={tasks} type="zombie_cleanup" onClear={clearTasks} />
         </div>
       )}
 

@@ -1,7 +1,8 @@
 import { db } from '../db.js';
 import { resetAirportSubscription } from './airport/adapters.js';
 import { fetchAirport } from './airport/fetch.js';
-import { fmtBytes, shouldResetToday } from './util.js';
+import { fmtBytes, shouldResetToday, classifyZombie } from './util.js';
+import { probeNodes } from './probe.js';
 import { maybeSendUserAlert, maybeSendAirportAlert, maybeSendUserSecurityAlert } from './alerts.js';
 import { pingDedupAndRecord } from './nodeHealth.js';
 
@@ -202,6 +203,72 @@ export async function runTrafficReset({ recordEmpty = false } = {}) {
   appendLog(taskId, `完成：重置 ${due.length} 个用户`);
   finishTask(taskId, 'success');
   return { taskId, reset: due.length, candidates: users.length };
+}
+
+// "真实可用性检测" —— 通过 sing-box 实连每个节点测试 URL，验证是否真能代理（非仅端口
+// 连通）。按机场范围（空=全部）。sing-box 缺失时任务失败并记录清晰原因，不影响其它。
+export async function runProbeCheck(airportIds = []) {
+  const taskId = createTask('probe', null);
+  try {
+    const ids = Array.isArray(airportIds) ? airportIds.map(Number).filter((n) => !Number.isNaN(n)) : [];
+    const rows = ids.length
+      ? db.prepare(`SELECT id, name, type, server, port, raw FROM nodes WHERE airport_id IN (${ids.map(() => '?').join(',')})`).all(...ids)
+      : db.prepare('SELECT id, name, type, server, port, raw FROM nodes').all();
+    appendLog(taskId, `开始可用性检测（sing-box 实连）：${ids.length ? `机场 [${ids.join(', ')}]` : '全部机场'}，共 ${rows.length} 个节点`);
+    if (!rows.length) {
+      appendLog(taskId, '没有可检测的节点');
+      finishTask(taskId, 'success');
+      return { taskId, total: 0, alive: 0, dead: 0 };
+    }
+    const parsed = rows.map((r) => ({ ...r, raw: parseJsonSafe(r.raw) }));
+    const r = await probeNodes(parsed);
+    appendLog(taskId, `完成：连通 ${r.alive}，不通 ${r.dead}${r.untestable ? `，${r.untestable} 个协议不支持` : ''}（去重实测 ${r.tested} 个配置）`);
+    finishTask(taskId, 'success');
+    return { taskId, ...r };
+  } catch (err) {
+    appendLog(taskId, `失败：${err.message}`);
+    finishTask(taskId, 'failed');
+    throw Object.assign(err, { taskId });
+  }
+}
+
+// "僵尸用户清理" —— 到期后 disableDays 天自动停用、deleteDays 天自动删除（0=关闭该动作）。
+// 停用释放机场账户槽位并停止流量统计/拉取处理；删除回收 token 并清理其订阅日志/续费记录。
+// recordEmpty=true 时即使无命中也留一条任务（手动运行用）。
+export async function runZombieCleanup({ disableDays = 0, deleteDays = 0, recordEmpty = false } = {}) {
+  const dis = Number(disableDays) || 0, del = Number(deleteDays) || 0;
+  const now = Date.now();
+  const users = db.prepare('SELECT id, name, enabled, expire_at FROM users WHERE expire_at IS NOT NULL AND expire_at < ?').all(now);
+  const toDisable = [], toDelete = [];
+  for (const u of users) {
+    const verdict = classifyZombie(u.expire_at, u.enabled, now, { disableDays: dis, deleteDays: del });
+    if (verdict === 'delete') toDelete.push(u);
+    else if (verdict === 'disable') toDisable.push(u);
+  }
+  if (!toDisable.length && !toDelete.length && !recordEmpty) return { taskId: null, disabled: 0, deleted: 0 };
+
+  const taskId = createTask('zombie_cleanup', null);
+  appendLog(taskId, `僵尸用户清理：停用阈值 ${dis || '关'} 天 / 删除阈值 ${del || '关'} 天；命中停用 ${toDisable.length}、删除 ${toDelete.length}`);
+  const disStmt = db.prepare('UPDATE users SET enabled = 0, updated_at = ? WHERE id = ?');
+  const delStmt = db.prepare('DELETE FROM users WHERE id = ?');
+  const delLogs = db.prepare('DELETE FROM sub_logs WHERE user_id = ?');
+  const delRen = db.prepare('DELETE FROM renewals WHERE user_id = ?');
+  db.transaction(() => {
+    for (const u of toDisable) disStmt.run(now, u.id);
+    for (const u of toDelete) { delLogs.run(u.id); delRen.run(u.id); delStmt.run(u.id); }
+  })();
+  const dayn = (u) => Math.floor((now - Number(u.expire_at)) / 86400000);
+  for (const u of toDisable) appendLog(taskId, `停用「${u.name}」（已到期 ${dayn(u)} 天）`);
+  for (const u of toDelete) appendLog(taskId, `删除「${u.name}」（已到期 ${dayn(u)} 天）`);
+  appendLog(taskId, `完成：停用 ${toDisable.length}，删除 ${toDelete.length}`);
+  finishTask(taskId, 'success');
+  return { taskId, disabled: toDisable.length, deleted: toDelete.length };
+}
+
+function parseJsonSafe(s, fb = {}) {
+  if (!s) return fb;
+  if (typeof s === 'object') return s;
+  try { return JSON.parse(s); } catch { return fb; }
 }
 
 // "到期/超限告警" —— 周期全量扫描（时间驱动条件如到期/即将到期无事件可挂，只能定期看钟）。

@@ -3,7 +3,8 @@ import cookieParser from 'cookie-parser';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
-import { seedAdmin } from './db.js';
+import { seedAdmin, getSetting } from './db.js';
+import { sanitizeAdminSlug } from './services/util.js';
 import { seedTemplates, seedSettings } from './seed.js';
 import { startScheduler } from './services/scheduler.js';
 
@@ -65,11 +66,28 @@ app.use('/api/audit', auditRoutes);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'API not found' }));
 
-// serve built frontend (production) with SPA fallback
+// serve built frontend (production) with SPA fallback. When 设置·隐藏入口 sets a
+// secret admin path, the SPA is served ONLY under /<slug> (basename injected so
+// client routing lives there); every other path returns a bare 404 so the panel
+// isn't discoverable at the root. Static assets (/assets, icons, manifest, sw)
+// stay reachable — their names are content-hashed and reveal nothing.
 if (fs.existsSync(config.publicDir)) {
-  app.use(express.static(config.publicDir));
+  const indexHtml = fs.readFileSync(path.join(config.publicDir, 'index.html'), 'utf8');
+  app.use(express.static(config.publicDir, { index: false }));
+
+  const sendApp = (res, base) => {
+    const html = indexHtml.replace('</head>', `  <script>window.__ADMIN_BASE__=${JSON.stringify(base)};</script>\n  </head>`);
+    res.set('Content-Type', 'text/html; charset=utf-8').send(html);
+  };
+  const notFound = (res) =>
+    res.status(404).type('html').send('<!doctype html><meta charset="utf-8"><title>404 Not Found</title><h1>404 Not Found</h1>');
+
   app.get('*', (req, res) => {
-    res.sendFile(path.join(config.publicDir, 'index.html'));
+    const slug = sanitizeAdminSlug(getSetting('admin_path', ''));
+    if (!slug) return sendApp(res, '/');
+    const prefix = `/${slug}`;
+    if (req.path === prefix || req.path.startsWith(`${prefix}/`)) return sendApp(res, prefix);
+    return notFound(res);
   });
 } else {
   app.get('/', (req, res) =>

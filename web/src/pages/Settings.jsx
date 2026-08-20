@@ -16,6 +16,7 @@ export default function Settings({ toast, onAccountChange }) {
         <PlansCard toast={toast} />
         <NotifyCard toast={toast} />
         <NodeExcludeCard toast={toast} />
+        <AdminPathCard toast={toast} />
         <DeliveryCard toast={toast} />
         <BackupCard toast={toast} />
         <TwoFACard settings={settings} toast={toast} reload={load} />
@@ -174,6 +175,68 @@ function NodeExcludeCard({ toast }) {
         <button className="btn primary" onClick={save} disabled={saving}>{saving ? <span className="spin" /> : '保存'}</button>
         <button className="btn" onClick={() => setValue(def)} title="恢复内置默认排除词">恢复默认</button>
       </div>
+    </div>
+  );
+}
+
+function AdminPathCard({ toast }) {
+  const [value, setValue] = useState(null);
+  const [input, setInput] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [confirm, confirmNode] = useConfirm();
+
+  useEffect(() => {
+    API.getAdminPath().then((r) => { setValue(r.value || ''); setInput(r.value || ''); }).catch((e) => toast.error(e.message));
+  }, [toast]);
+  if (value === null) return <div className="card"><h3 style={{ marginTop: 0 }}>🕵️ 隐藏管理入口</h3><div className="muted small"><span className="spin" /></div></div>;
+
+  const clean = (input || '').trim().replace(/^\/+|\/+$/g, '');
+  const valid = clean === '' || /^[A-Za-z0-9_-]{1,64}$/.test(clean);
+  const origin = window.location.origin;
+
+  const save = async () => {
+    if (!valid) return toast.error('路径只能是字母/数字/下划线/连字符（1–64 位）');
+    const msg = clean
+      ? `保存后，管理面板将只能通过 ${origin}/${clean} 访问，根路径及其它路径返回 404。请务必记住这个路径！`
+      : '将清除隐藏路径，管理面板恢复在根路径可访问。';
+    if (!(await confirm(msg))) return;
+    setSaving(true);
+    try {
+      const r = await API.saveAdminPath(clean);
+      setValue(r.value || ''); setInput(r.value || '');
+      toast.success('已保存');
+      if (r.value) {
+        // navigate to the new secret path so the current session isn't stranded on a 404
+        setTimeout(() => { window.location.href = `${origin}/${r.value}`; }, 800);
+      }
+    } catch (e) { toast.error(e.message); } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="card">
+      <h3 style={{ marginTop: 0 }}>🕵️ 隐藏管理入口</h3>
+      <p className="muted small">
+        设一个只有你知道的路径，管理面板将<strong>只在该路径下</strong>可访问（如 <code className="mono">{origin}/{clean || 's3cr3t'}</code>），
+        其它任何路径都返回 404，避免登录入口被扫描/发现。留空 = 关闭（根路径可访问）。
+      </p>
+      <div className="field">
+        <label>自定义路径（留空关闭）</label>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span className="muted small mono">{origin}/</span>
+          <input className="mono" value={input} onChange={(e) => setInput(e.target.value)} placeholder="s3cr3t-panel" style={{ flex: 1 }} />
+        </div>
+        {!valid && <div className="err-text small" style={{ marginTop: 4 }}>只能用字母/数字/下划线/连字符，1–64 位</div>}
+      </div>
+      <p className="muted small">
+        ⚠️ 忘记路径会把自己锁在外面——恢复方法：在数据库执行
+        <code className="mono"> UPDATE settings SET value='' WHERE key='admin_path'</code>，或用「恢复」导入旧备份。
+        API（<code>/api</code>）与订阅（<code>/sub</code>）不受影响。
+      </p>
+      <div className="btn-row">
+        <button className="btn primary" onClick={save} disabled={saving || !valid}>{saving ? <span className="spin" /> : '保存'}</button>
+        {value && <span className="muted small" style={{ alignSelf: 'center' }}>当前：<code className="mono">/{value}</code></span>}
+      </div>
+      {confirmNode}
     </div>
   );
 }

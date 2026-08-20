@@ -3,7 +3,7 @@ import { parseSubscription, parseUri, parseUserInfo } from '../src/services/node
 import { processAirportNodes, filterNodes, nodeHealthScore, orderByHealth, previewFilter, planLatencyChecks, endpointKey, dedupByEndpoint } from '../src/services/nodeProcess.js';
 import { toBase64, toClash, toSingbox, toSurge, toQuanX, toLoon, detectFormat } from '../src/services/subscription/converters.js';
 import { DEFAULT_TEMPLATES } from '../src/services/subscription/defaultTemplates.js';
-import { accumulateUsed, shouldResetToday } from '../src/services/util.js';
+import { accumulateUsed, shouldResetToday, classifyZombie, sanitizeAdminSlug } from '../src/services/util.js';
 import { signAction, verifyAction } from '../src/services/actionToken.js';
 import { cronMatch, isValidCron, describeCron } from '../src/services/cron.js';
 import { combineExclude, DEFAULT_GLOBAL_EXCLUDE } from '../src/services/nodeProcess.js';
@@ -172,6 +172,32 @@ ok(quanRendered.includes('[filter_remote]') && !quanRendered.includes('<PROXY_NA
   ok(shouldResetToday(0, D(2026, 3, 15)) === false, 'day 0 = off');
   ok(shouldResetToday(null, D(2026, 3, 15)) === false, 'null = off');
   ok(shouldResetToday(32, D(2026, 3, 15)) === false, 'invalid day 32 = off');
+}
+
+// --- zombie cleanup classification (expiry + N/M day thresholds) ---
+{
+  const now = 1_000_000_000_000;
+  const day = 86400000;
+  const cfg = { disableDays: 7, deleteDays: 30 };
+  ok(classifyZombie(now + day, 1, now, cfg) === null, 'not yet expired → null');
+  ok(classifyZombie(now - 3 * day, 1, now, cfg) === null, 'expired 3d (< 7) → null');
+  ok(classifyZombie(now - 10 * day, 1, now, cfg) === 'disable', 'expired 10d → disable');
+  ok(classifyZombie(now - 10 * day, 0, now, cfg) === null, 'expired 10d but already disabled → null');
+  ok(classifyZombie(now - 40 * day, 1, now, cfg) === 'delete', 'expired 40d → delete (precedence)');
+  ok(classifyZombie(now - 40 * day, 0, now, cfg) === 'delete', 'delete applies even if already disabled');
+  ok(classifyZombie(now - 40 * day, 1, now, { disableDays: 0, deleteDays: 0 }) === null, 'both thresholds 0 = off');
+  ok(classifyZombie(null, 1, now, cfg) === null, 'no expiry set → null');
+  ok(classifyZombie(now - 40 * day, 1, now, { disableDays: 7, deleteDays: 0 }) === 'disable', 'delete off → disable only');
+}
+
+// --- hidden admin path slug sanitization ---
+{
+  ok(sanitizeAdminSlug('s3cr3t-panel') === 's3cr3t-panel', 'valid slug kept');
+  ok(sanitizeAdminSlug('/my_panel/') === 'my_panel', 'strips surrounding slashes');
+  ok(sanitizeAdminSlug('  Admin_1  ') === 'Admin_1', 'trims whitespace');
+  ok(sanitizeAdminSlug('') === '' && sanitizeAdminSlug(null) === '', 'empty/null → off');
+  ok(sanitizeAdminSlug('a/b') === '' && sanitizeAdminSlug('a.b') === '' && sanitizeAdminSlug('a b') === '', 'slash/dot/space rejected');
+  ok(sanitizeAdminSlug('x'.repeat(65)) === '' && sanitizeAdminSlug('x'.repeat(64)).length === 64, 'length bound 64');
 }
 
 // --- signed action tokens (magic links) ---
