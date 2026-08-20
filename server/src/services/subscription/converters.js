@@ -187,9 +187,11 @@ export function nodeToSingbox(n) {
       return { type: 'shadowsocks', tag, server: n.server, server_port: n.port, method: r.cipher, password: r.password };
     case 'hysteria2':
       return { type: 'hysteria2', tag, server: n.server, server_port: n.port, password: r.password,
+        ...(r.obfs ? { obfs: { type: r.obfs, password: r.obfsPassword || '' } } : {}),
         tls: { enabled: true, server_name: r.sni || n.server, insecure: !!r.insecure } };
     case 'tuic':
       return { type: 'tuic', tag, server: n.server, server_port: n.port, uuid: r.uuid, password: r.password,
+        ...(r.congestion ? { congestion_control: r.congestion } : {}),
         tls: { enabled: true, server_name: r.sni || n.server, alpn: [r.alpn || 'h3'] } };
     case 'anytls':
       return { type: 'anytls', tag, server: n.server, server_port: n.port, password: r.password,

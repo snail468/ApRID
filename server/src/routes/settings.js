@@ -89,16 +89,19 @@ router.get('/delivery', (req, res) => {
   res.json({
     dedup: getSetting('sub_dedup_endpoints', '1') !== '0',
     sortByHealth: getSetting('sub_sort_by_health', '1') !== '0',
+    dropDead: getSetting('sub_drop_dead', '0') === '1',
   });
 });
 router.put('/delivery', (req, res) => {
   const b = req.body || {};
   if (b.dedup !== undefined) setSetting('sub_dedup_endpoints', b.dedup ? '1' : '0');
   if (b.sortByHealth !== undefined) setSetting('sub_sort_by_health', b.sortByHealth ? '1' : '0');
+  if (b.dropDead !== undefined) setSetting('sub_drop_dead', b.dropDead ? '1' : '0');
   res.json({
     ok: true,
     dedup: getSetting('sub_dedup_endpoints', '1') !== '0',
     sortByHealth: getSetting('sub_sort_by_health', '1') !== '0',
+    dropDead: getSetting('sub_drop_dead', '0') === '1',
   });
 });
 

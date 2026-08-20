@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { API } from '../api.js';
 import { useConfirm, Modal, fmtDateTime } from '../ui.jsx';
 import { useTable, SortTh } from '../hooks/useTable.jsx';
@@ -35,7 +35,10 @@ export default function Nodes({ toast }) {
       const ids = t.selected.size ? [...t.selected] : undefined;
       const r = await API.nodeProbe(ids);
       let msg = `可用性检测完成：连通 ${r.alive}，不通 ${r.dead}`;
-      if (r.untestable) msg += `，${r.untestable} 个协议不支持`;
+      if (r.untestable) {
+        msg += `，${r.untestable} 个跳过`;
+        if (r.unsupported?.length) msg += `（当前 sing-box 不支持 ${r.unsupported.join('/')}）`;
+      }
       toast.success(msg); load(); t.clearSelection();
     } catch (e) { toast.error(e.message); }
     finally { setProbing(false); }
@@ -179,35 +182,77 @@ function LatencyTrendModal({ node, toast, onClose }) {
 }
 
 function LatencyChart({ samples }) {
-  const W = 560, H = 160, pad = 26;
+  // asymmetric padding: extra room on the left so the y-axis labels (e.g. "1234 ms")
+  // never get clipped by the viewBox edge — the old symmetric pad=26 cut them off.
+  const W = 560, H = 172;
+  const padL = 52, padR = 14, padT = 14, padB = 26;
+  const svgRef = useRef(null);
+  const [hover, setHover] = useState(null); // index of the sample under the cursor
+
   const okVals = samples.filter((s) => s.latency >= 0).map((s) => s.latency);
   const max = Math.max(50, ...okVals);
   const t0 = samples[0].ts, t1 = samples[samples.length - 1].ts;
   const span = Math.max(1, t1 - t0);
-  const x = (ts) => pad + ((ts - t0) / span) * (W - pad * 2);
-  const y = (l) => H - pad - (l / max) * (H - pad * 2);
+  const x = (ts) => padL + ((ts - t0) / span) * (W - padL - padR);
+  const y = (l) => H - padB - (l / max) * (H - padT - padB);
+  const yBase = H - padB;
 
-  // build the line only over successful readings; timeouts are drawn as red marks
+  const cx = samples.map((s) => x(s.ts));               // plotted x per sample (hit-testing)
   const pts = samples.filter((s) => s.latency >= 0).map((s) => `${x(s.ts).toFixed(1)},${y(s.latency).toFixed(1)}`).join(' ');
-  const timeouts = samples.filter((s) => s.latency < 0);
+  const ticks = [0, Math.round(max / 2), max];          // y gridline values
+
+  // map the cursor to the nearest sample by plotted x (SVG scales to 100% width,
+  // so convert client px → viewBox units first).
+  const onMove = (e) => {
+    const el = svgRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const mx = ((e.clientX - rect.left) / rect.width) * W;
+    let best = 0, bestD = Infinity;
+    for (let i = 0; i < cx.length; i++) {
+      const d = Math.abs(cx[i] - mx);
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    setHover(best);
+  };
+
+  const hv = hover != null ? samples[hover] : null;
+  const hvOk = hv && hv.latency >= 0;
+  const hx = hv ? cx[hover] : 0;
+  const hy = hvOk ? y(hv.latency) : yBase;
+  // tooltip box, flipped/clamped to stay inside the plot
+  const tipLines = hv ? [fmtDateTime(hv.ts), hvOk ? `${hv.latency} ms` : '超时'] : [];
+  const tipW = Math.max(tipLines[0] ? tipLines[0].length * 6.2 : 0, 56) + 14;
+  const tipH = 32;
+  let tipX = hx + 12; if (tipX + tipW > W - padR) tipX = hx - 12 - tipW;
+  let tipY = hy - tipH - 10; if (tipY < padT) tipY = hy + 12;
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto' }}>
-      <line x1={pad} y1={H - pad} x2={W - pad} y2={H - pad} stroke="var(--border)" />
-      <line x1={pad} y1={pad} x2={pad} y2={H - pad} stroke="var(--border)" />
-      <text x={pad - 4} y={pad + 4} textAnchor="end" fontSize="10" fill="var(--text-dim)">{max}ms</text>
-      <text x={pad - 4} y={H - pad} textAnchor="end" fontSize="10" fill="var(--text-dim)">0</text>
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto' }}
+      onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+      {/* y gridlines + labels */}
+      {ticks.map((tk) => (
+        <g key={tk}>
+          <line x1={padL} y1={y(tk)} x2={W - padR} y2={y(tk)} stroke="var(--border)"
+            strokeDasharray={tk === 0 ? '' : '3 3'} opacity={tk === 0 ? 1 : 0.5} />
+          <text x={padL - 6} y={y(tk) + 3} textAnchor="end" fontSize="10" fill="var(--text-dim)">{tk}{tk === max ? ' ms' : ''}</text>
+        </g>
+      ))}
       {pts && <polyline points={pts} fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
-      {samples.filter((s) => s.latency >= 0).map((s, i) => (
-        <circle key={`o${i}`} cx={x(s.ts)} cy={y(s.latency)} r="2" fill="var(--accent)">
-          <title>{`${fmtDateTime(s.ts)}：${s.latency} ms`}</title>
-        </circle>
+      {samples.map((s, i) => (s.latency >= 0
+        ? <circle key={`o${i}`} cx={cx[i]} cy={y(s.latency)} r="2" fill="var(--accent)" />
+        : <circle key={`t${i}`} cx={cx[i]} cy={yBase} r="3" fill="var(--red)" />
       ))}
-      {timeouts.map((s, i) => (
-        <circle key={`t${i}`} cx={x(s.ts)} cy={H - pad} r="3" fill="var(--red)">
-          <title>{`${fmtDateTime(s.ts)}：超时`}</title>
-        </circle>
-      ))}
+      {/* hover: guide line + highlighted point + tooltip */}
+      {hv && (
+        <g pointerEvents="none">
+          <line x1={hx} y1={padT} x2={hx} y2={yBase} stroke="var(--text-dim)" strokeDasharray="3 3" opacity="0.6" />
+          <circle cx={hx} cy={hy} r="4" fill={hvOk ? 'var(--accent)' : 'var(--red)'} stroke="var(--bg)" strokeWidth="1.5" />
+          <rect x={tipX} y={tipY} width={tipW} height={tipH} rx="4" fill="var(--bg-elev2)" stroke="var(--border)" />
+          <text x={tipX + 7} y={tipY + 13} fontSize="10" fill="var(--text-dim)">{tipLines[0]}</text>
+          <text x={tipX + 7} y={tipY + 26} fontSize="11" fontWeight="600" fill={hvOk ? 'var(--accent)' : 'var(--red)'}>{tipLines[1]}</text>
+        </g>
+      )}
     </svg>
   );
 }

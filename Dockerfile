@@ -26,7 +26,9 @@ ENV TZ=Asia/Shanghai
 # Best-effort install — the `|| echo` makes a download failure NON-fatal so the
 # image still builds; the probe degrades gracefully at runtime if the binary is
 # absent. Override the version with --build-arg SINGBOX_VERSION=x.y.z.
-ARG SINGBOX_VERSION=1.11.4
+# 1.12+ is needed for anytls; probe.js also drops any outbound type an older core
+# rejects, so a downgrade just makes those protocols untestable (not fatal).
+ARG SINGBOX_VERSION=1.12.0
 RUN set -u; arch="$(dpkg --print-architecture)"; \
     case "$arch" in amd64) sb=amd64;; arm64) sb=arm64;; *) sb='';; esac; \
     if [ -n "$sb" ]; then ( set -e; \

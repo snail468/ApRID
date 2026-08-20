@@ -261,9 +261,13 @@ function DeliveryCard({ toast }) {
         <input type="checkbox" checked={cfg.dedup} disabled={saving} onChange={(e) => save({ dedup: e.target.checked })} />
         <span>按端点去重：同一 <code>服务器:端口</code> 只保留一个，剔除多账号导入的重复节点</span>
       </label>
-      <label className="checkbox-inline">
+      <label className="checkbox-inline" style={{ marginBottom: 8 }}>
         <input type="checkbox" checked={cfg.sortByHealth} disabled={saving} onChange={(e) => save({ sortByHealth: e.target.checked })} />
-        <span>好节点优先：按可用率/延迟把健康节点排在订阅前面</span>
+        <span>好节点优先：按可用性/可用率/延迟把健康节点排在订阅前面（可用性检测通过的最优先，不通的沉底）</span>
+      </label>
+      <label className="checkbox-inline">
+        <input type="checkbox" checked={cfg.dropDead} disabled={saving} onChange={(e) => save({ dropDead: e.target.checked })} />
+        <span>不下发不通节点：可用性检测判定不通（<code>alive=0</code>）的节点直接不下发；未检测的节点不受影响</span>
       </label>
     </div>
   );

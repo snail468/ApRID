@@ -15,9 +15,38 @@ import path from 'node:path';
 import { db } from '../db.js';
 import { config } from '../config.js';
 import { nodeToSingbox } from './subscription/converters.js';
-import { nodeSignature, buildProbeConfig, parseDelayResult } from './probeFormat.js';
+import { nodeSignature, buildProbeConfig, parseDelayResult, parseUnknownOutboundTypes } from './probeFormat.js';
 
-export { nodeSignature, buildProbeConfig, parseDelayResult };
+export { nodeSignature, buildProbeConfig, parseDelayResult, parseUnknownOutboundTypes };
+
+// Outbound types the installed sing-box build has rejected in this process, so we
+// can pre-drop them on later runs without paying a failing `check` each time.
+// (e.g. 'anytls' when the bundled core is <1.12.) Cleared only on restart.
+const unsupportedTypes = new Set();
+
+// The sing-box outbound type a node maps to (ss -> 'shadowsocks', etc.), or null.
+function singboxType(node) {
+  const ob = nodeToSingbox(node);
+  return ob ? ob.type : null;
+}
+
+// Run `sing-box check -c <cfg>` and report whether the config parses, capturing
+// stderr so the caller can learn which outbound types are unknown. Never throws.
+function runSingboxCheck(cfgPath) {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(config.singboxPath, ['check', '-c', cfgPath], { stdio: ['ignore', 'ignore', 'pipe'] });
+    } catch (err) {
+      resolve({ ok: false, spawnError: err, stderr: '' });
+      return;
+    }
+    let stderr = '';
+    child.stderr?.on('data', (d) => { stderr += d.toString(); });
+    child.on('error', (err) => resolve({ ok: false, spawnError: err, stderr }));
+    child.on('exit', (code) => resolve({ ok: code === 0, stderr }));
+  });
+}
 
 function getFreePort() {
   return new Promise((resolve, reject) => {
@@ -75,18 +104,51 @@ export async function probeNodes(rows, { concurrency = 10, timeout = config.prob
     if (!g) { g = { node: r, ids: [], tag: `p${seq++}` }; groups.set(sig, g); }
     g.ids.push(r.id);
   }
-  const items = [...groups.values()].filter((g) => nodeToSingbox({ ...g.node, name: g.tag }));
-  const untestable = groups.size - items.length; // protocols sing-box can't build
+  let items = [...groups.values()].filter((g) => nodeToSingbox({ ...g.node, name: g.tag }));
+  let untestable = groups.size - items.length; // protocols this codebase can't build
+  // pre-drop types a previous run already learned this sing-box build rejects
+  if (unsupportedTypes.size) {
+    const before = items.length;
+    items = items.filter((g) => !unsupportedTypes.has(singboxType(g.node)));
+    untestable += before - items.length;
+  }
 
   if (!items.length) {
-    return { total: rows.length, tested: 0, alive: 0, dead: 0, untestable, ok: true };
+    return { total: rows.length, tested: 0, alive: 0, dead: 0, untestable, ok: true, unsupported: [...unsupportedTypes] };
   }
 
   const clashPort = await getFreePort();
-  const cfg = buildProbeConfig(items, clashPort);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aprid-probe-'));
   const cfgPath = path.join(dir, 'config.json');
-  fs.writeFileSync(cfgPath, JSON.stringify(cfg));
+
+  // Preflight: sing-box aborts the *entire* config on the first outbound type it
+  // doesn't recognise, so a single anytls node on an old core would fail every
+  // node. Iteratively `check` and strip unknown types (one distinct type surfaces
+  // per pass) so the rest still get probed; the dropped ones count as untestable.
+  try {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      fs.writeFileSync(cfgPath, JSON.stringify(buildProbeConfig(items, clashPort)));
+      const chk = await runSingboxCheck(cfgPath);
+      if (chk.spawnError) {
+        fs.rmSync(dir, { recursive: true, force: true });
+        throw new Error(`无法启动 sing-box（${config.singboxPath}）：${chk.spawnError.message}。请安装 sing-box 或设置 SINGBOX_PATH。`);
+      }
+      if (chk.ok) break;
+      const bad = parseUnknownOutboundTypes(chk.stderr);
+      if (!bad.length) break; // some other error — let the real run surface it
+      for (const t of bad) unsupportedTypes.add(t);
+      const before = items.length;
+      items = items.filter((g) => !bad.includes(singboxType(g.node)));
+      untestable += before - items.length;
+      if (!items.length) {
+        fs.rmSync(dir, { recursive: true, force: true });
+        return { total: rows.length, tested: 0, alive: 0, dead: 0, untestable, ok: true, unsupported: [...unsupportedTypes] };
+      }
+    }
+  } catch (err) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw err;
+  }
 
   let child;
   try {
@@ -137,7 +199,7 @@ export async function probeNodes(rows, { concurrency = 10, timeout = config.prob
       }
     })();
 
-    return { total: rows.length, tested: items.length, endpointsTested: items.length, alive, dead, untestable, ok: true };
+    return { total: rows.length, tested: items.length, endpointsTested: items.length, alive, dead, untestable, ok: true, unsupported: [...unsupportedTypes] };
   } finally {
     try { child.kill('SIGKILL'); } catch { /* noop */ }
     await Promise.race([exited, new Promise((r) => setTimeout(r, 1500))]);

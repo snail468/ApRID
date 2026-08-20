@@ -30,6 +30,18 @@ export function buildProbeConfig(items, clashPort) {
   };
 }
 
+// Pull every outbound type the installed sing-box rejected out of its
+// check/run stderr, e.g. "outbounds[106]: unknown outbound type: anytls" -> ['anytls'].
+// Lets the probe drop protocols this sing-box build can't parse (e.g. anytls on
+// a <1.12 core) instead of the single bad outbound failing the whole config.
+export function parseUnknownOutboundTypes(stderr = '') {
+  const set = new Set();
+  const re = /unknown outbound type:\s*([a-z0-9_-]+)/gi;
+  let m;
+  while ((m = re.exec(stderr))) set.add(m[1].toLowerCase());
+  return [...set];
+}
+
 // Interpret a clash-API /delay response. 200 with a numeric delay = reachable
 // through the proxy; anything else (timeout, connect error) = dead.
 export function parseDelayResult(status, body) {

@@ -8,7 +8,7 @@ import { signAction, verifyAction } from '../src/services/actionToken.js';
 import { cronMatch, isValidCron, describeCron } from '../src/services/cron.js';
 import { combineExclude, DEFAULT_GLOBAL_EXCLUDE } from '../src/services/nodeProcess.js';
 import { describeAction, sanitizeBody } from '../src/services/auditFormat.js';
-import { nodeSignature, buildProbeConfig, parseDelayResult } from '../src/services/probeFormat.js';
+import { nodeSignature, buildProbeConfig, parseDelayResult, parseUnknownOutboundTypes } from '../src/services/probeFormat.js';
 import { load as yamlLoad } from 'js-yaml';
 
 let pass = 0, fail = 0;
@@ -278,6 +278,19 @@ ok(quanRendered.includes('[filter_remote]') && !quanRendered.includes('<PROXY_NA
   // ordering is stable & good-first; untested keeps its input position among peers
   const order = orderByHealth([dead, untested, slow, good], stats).map((n) => n.server);
   ok(order.join(',') === '1.1.1.1,3.3.3.3,9.9.9.9,2.2.2.2', `orderByHealth good-first -> ${order.join(',')}`);
+
+  // real availability probe (alive/alive_ms) is the strongest signal
+  const probeAlive = { server: '3.3.3.3', port: 443, alive: 1, alive_ms: 120 };   // history says slow, probe says alive
+  const probeDead = { server: '1.1.1.1', port: 443, alive: 0 };                    // history perfect, probe says dead
+  ok(nodeHealthScore(probeAlive, stats) > nodeHealthScore(good, stats), 'health: probe-alive outranks history-only');
+  ok(nodeHealthScore(probeDead, stats) < nodeHealthScore(dead, stats), 'health: probe-dead sinks below history-dead');
+  ok(nodeHealthScore(probeDead, stats) < nodeHealthScore(untested, stats), 'health: probe-dead below untested');
+  const fastProbe = { server: 'x', port: 1, alive: 1, alive_ms: 40 };
+  const slowProbe = { server: 'y', port: 1, alive: 1, alive_ms: 600 };
+  ok(nodeHealthScore(fastProbe, stats) > nodeHealthScore(slowProbe, stats), 'health: faster probe ranks higher');
+  // probe-dead sorts to the very bottom, probe-alive to the very top
+  const porder = orderByHealth([probeDead, untested, good, probeAlive], stats).map((n) => n.server);
+  ok(porder[0] === '3.3.3.3' && porder[porder.length - 1] === '1.1.1.1', `orderByHealth probe-aware -> ${porder.join(',')}`);
 }
 
 // --- deduped latency planning: one ping per endpoint, fan-out, freshness reuse ---
@@ -386,6 +399,18 @@ ok(quanRendered.includes('[filter_remote]') && !quanRendered.includes('<PROXY_NA
   ok(parseDelayResult(200, { delay: 187 }).ok === true && parseDelayResult(200, { delay: 187 }).ms === 187, 'delay 200 → alive');
   ok(parseDelayResult(408, { message: 'timeout' }).ok === false && parseDelayResult(408, { message: 'timeout' }).ms === -1, 'delay 408 → dead');
   ok(parseDelayResult(200, {}).ok === false, 'delay 200 without number → dead');
+
+  // unknown-outbound-type parsing: lets the probe drop protocols an old sing-box rejects
+  ok(parseUnknownOutboundTypes('decode config: outbounds[106]: unknown outbound type: anytls').join(',') === 'anytls', 'parse unknown type anytls');
+  const multi = parseUnknownOutboundTypes('unknown outbound type: anytls\nunknown outbound type: tuic').sort();
+  ok(multi.join(',') === 'anytls,tuic', `parse multiple unknown types -> ${multi.join(',')}`);
+  ok(parseUnknownOutboundTypes('some other error').length === 0, 'no unknown-type match → empty');
+
+  // hy2 obfs + tuic congestion carried into sing-box outbounds
+  const hy2ob = toSingbox([{ name: 'h', type: 'hysteria2', server: 'h.com', port: 443, raw: { password: 'p', obfs: 'salamander', obfsPassword: 'x' } }]);
+  ok(JSON.parse(hy2ob).outbounds.some((o) => o.type === 'hysteria2' && o.obfs && o.obfs.type === 'salamander'), 'singbox hy2 obfs');
+  const tuicC = toSingbox([{ name: 't', type: 'tuic', server: 't.com', port: 443, raw: { uuid: 'u', password: 'p', congestion: 'bbr' } }]);
+  ok(JSON.parse(tuicC).outbounds.some((o) => o.type === 'tuic' && o.congestion_control === 'bbr'), 'singbox tuic congestion');
 }
 
 // --- UA detection ---

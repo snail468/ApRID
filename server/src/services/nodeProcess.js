@@ -187,11 +187,21 @@ export function dedupByEndpoint(nodes) {
 }
 
 // ---- health-based ordering (pure; stats come from nodeHealth.getNodeStatsMap) ----
-// Sortable score, higher = healthier. Falls back to the node's live `latency`
-// when there is no history. Buckets so order is: alive-fast > alive-slow >
-// untested (neutral 0) > timed-out/dead. Untested nodes all score 0 so a stable
-// sort keeps their original relative order.
+// Sortable score, higher = healthier. Priority of signals, strongest first:
+//   1. the real through-proxy availability probe (nodes.alive / alive_ms) — an
+//      end-to-end verdict, so it outranks and out-sinks everything else;
+//   2. the endpoint's latency history (statsMap);
+//   3. the node's live TCP `latency` reading.
+// Buckets so order is: probe-alive > history-alive > untested (neutral 0) >
+// history/live-dead > probe-dead. Untested nodes all score 0 so a stable sort
+// keeps their original relative order.
 export function nodeHealthScore(node, statsMap) {
+  // 1) real availability probe — the most authoritative signal
+  if (node.alive === 0) return -2000;                       // proven dead end-to-end
+  if (node.alive === 1) {                                    // proven reachable
+    const ms = Math.min(node.alive_ms >= 0 ? node.alive_ms : 300, 2000);
+    return 2000 - ms / 4;                                    // ranks above history-only nodes
+  }
   const s = statsMap.get(`${node.server}:${node.port}`);
   let uptime = null;
   let lat = null;

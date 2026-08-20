@@ -45,7 +45,8 @@ export function collectUserNodes(user) {
   const collected = [];
   for (const ap of airports) {
     let nodes = db.prepare('SELECT * FROM nodes WHERE airport_id = ?').all(ap.id)
-      .map((row) => ({ name: row.name, type: row.type, server: row.server, port: row.port, raw: safeJson(row.raw), latency: row.latency }));
+      .map((row) => ({ name: row.name, type: row.type, server: row.server, port: row.port, raw: safeJson(row.raw),
+        latency: row.latency, alive: row.alive, alive_ms: row.alive_ms }));
 
     // per-airport processing already applied at import time is stored in nodes,
     // but apply cross-airport unique prefix here if configured on the airport
@@ -58,6 +59,10 @@ export function collectUserNodes(user) {
   // delivery so changing it takes effect immediately (no re-pull needed).
   const userFilter = { ...filter, exclude: combineExclude(getSetting('global_node_exclude', ''), filter.exclude) };
   let out = filterNodes(collected, userFilter);
+  // drop nodes the real availability probe marked dead (alive === 0) so unreachable
+  // servers aren't delivered at all. Opt-in (default off) — untested/alive nodes are
+  // untouched; ordering already sinks dead nodes when好节点优先 is on.
+  if (getSetting('sub_drop_dead', '0') === '1') out = out.filter((n) => n.alive !== 0);
   // drop duplicate physical endpoints (same server:port pulled by several
   // accounts) so the subscription isn't full of identical servers. Off when the
   // admin sets sub_dedup_endpoints=0.
