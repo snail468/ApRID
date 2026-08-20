@@ -6,6 +6,7 @@ import { detectChallenge, ANTIBOT_HINT } from './antibot.js';
 import { accumulateUsed } from '../util.js';
 import { maybeSendAirportAlert } from '../alerts.js';
 import { latestLatencyByEndpoint } from '../nodeHealth.js';
+import { nodeSignature } from '../probeFormat.js';
 
 export const DEFAULT_UA = 'ClashMetaForAndroid/2.10.1.Meta';
 
@@ -95,19 +96,25 @@ async function doFetchAirport(airportId, ap) {
     // any fetch). Prefer this airport's own last reading, then fall back to any
     // other airport's reading for the same endpoint. Keyed on server:port, which
     // is stable across re-pulls even when names/ids change.
-    const prevLatency = new Map(
-      db.prepare('SELECT server, port, latency, latency_at FROM nodes WHERE airport_id = ?')
-        .all(airportId)
-        .map((r) => [`${r.server}:${r.port}`, r])
-    );
+    //
+    // Availability (alive/alive_ms) is carried the same way, but keyed on the FULL
+    // node signature (type+server+port+all raw params) rather than just the
+    // endpoint: it's a verdict about a specific proxy config, so if the airport
+    // rotated a password/uuid the signature changes and the node correctly resets
+    // to untested (NULL) to be re-probed, while unchanged configs keep their verdict.
+    const prevRows = db.prepare('SELECT server, port, type, raw, latency, latency_at, alive, alive_ms, alive_at FROM nodes WHERE airport_id = ?').all(airportId);
+    const prevLatency = new Map(prevRows.map((r) => [`${r.server}:${r.port}`, r]));
+    const prevAlive = new Map(prevRows.filter((r) => r.alive != null).map((r) => [nodeSignature(r), r]));
     db.prepare('DELETE FROM nodes WHERE airport_id = ?').run(airportId);
     const ins = db.prepare(
-      'INSERT INTO nodes (airport_id, name, type, server, port, raw, uri, group_name, latency, latency_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+      'INSERT INTO nodes (airport_id, name, type, server, port, raw, uri, group_name, latency, latency_at, alive, alive_ms, alive_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
     );
     for (const n of nodes) {
       const key = `${n.server}:${n.port}`;
       const prev = prevLatency.get(key) || globalLatency.get(key);
-      ins.run(airportId, n.name, n.type, n.server, n.port, JSON.stringify(n.raw || {}), n.uri || '', ap.group_name || '', prev?.latency ?? null, prev?.latency_at ?? null, now);
+      const av = prevAlive.get(nodeSignature(n));
+      ins.run(airportId, n.name, n.type, n.server, n.port, JSON.stringify(n.raw || {}), n.uri || '', ap.group_name || '',
+        prev?.latency ?? null, prev?.latency_at ?? null, av?.alive ?? null, av?.alive_ms ?? null, av?.alive_at ?? null, now);
     }
     db.prepare(
       `UPDATE airports SET last_fetch_at = ?, last_fetch_ok = ?, fetch_fail_count = 0,
