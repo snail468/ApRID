@@ -5,6 +5,7 @@ import { fmtBytes, shouldResetToday, classifyZombie } from './util.js';
 import { probeNodes } from './probe.js';
 import { maybeSendUserAlert, maybeSendAirportAlert, maybeSendUserSecurityAlert } from './alerts.js';
 import { pingDedupAndRecord } from './nodeHealth.js';
+import { getBackupConfig, performOffsiteBackup } from './backup.js';
 
 function createTask(type, refId) {
   const now = Date.now();
@@ -263,6 +264,24 @@ export async function runZombieCleanup({ disableDays = 0, deleteDays = 0, record
   appendLog(taskId, `完成：停用 ${toDisable.length}，删除 ${toDelete.length}`);
   finishTask(taskId, 'success');
   return { taskId, disabled: toDisable.length, deleted: toDelete.length };
+}
+
+// "异地备份" —— 生成数据库快照并上传到 WebDAV / HTTP 端点，全程记入任务日志。
+// 由设置页手动触发或定时调度（scheduler 的 offsite_backup）调用。
+export async function runOffsiteBackup() {
+  const taskId = createTask('offsite_backup', null);
+  try {
+    const cfg = getBackupConfig();
+    appendLog(taskId, `开始异地备份（${cfg.provider === 'http' ? 'HTTP' : 'WebDAV'}）→ ${cfg.url || '（未配置地址）'}`);
+    const r = await performOffsiteBackup(cfg, { log: (line) => appendLog(taskId, line) });
+    appendLog(taskId, `完成：已上传 ${r.filename}${r.deleted ? `，清理旧备份 ${r.deleted} 份` : ''}`);
+    finishTask(taskId, 'success');
+    return { taskId, ...r };
+  } catch (err) {
+    appendLog(taskId, `失败：${err.message}`);
+    finishTask(taskId, 'failed');
+    throw Object.assign(err, { taskId });
+  }
 }
 
 function parseJsonSafe(s, fb = {}) {

@@ -3,9 +3,9 @@
 // break the request. describeAction/sanitizeBody are pure (unit-tested).
 
 import { db } from '../db.js';
-import { describeAction, sanitizeBody } from './auditFormat.js';
+import { describeAction, sanitizeBody, explainAudit } from './auditFormat.js';
 
-export { describeAction, sanitizeBody };
+export { describeAction, sanitizeBody, explainAudit };
 
 const RETENTION_DAYS = 90;
 
@@ -59,5 +59,7 @@ export function queryAudit({ actor, q, limit = 200, before } = {}) {
   if (before) { sql += ' AND id < ?'; params.push(before); }
   sql += ' ORDER BY id DESC LIMIT ?';
   params.push(Math.min(Number(limit) || 200, 500));
-  return db.prepare(sql).all(...params);
+  // attach a natural-language explanation per row (computed at read time so it
+  // also covers历史记录). explainAudit is pure and cannot throw on bad JSON.
+  return db.prepare(sql).all(...params).map((r) => ({ ...r, explain: explainAudit(r) }));
 }

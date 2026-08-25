@@ -7,7 +7,7 @@ import { accumulateUsed, shouldResetToday, classifyZombie, sanitizeAdminSlug } f
 import { signAction, verifyAction } from '../src/services/actionToken.js';
 import { cronMatch, isValidCron, describeCron } from '../src/services/cron.js';
 import { combineExclude, DEFAULT_GLOBAL_EXCLUDE } from '../src/services/nodeProcess.js';
-import { describeAction, sanitizeBody } from '../src/services/auditFormat.js';
+import { describeAction, sanitizeBody, explainAudit } from '../src/services/auditFormat.js';
 import { nodeSignature, buildProbeConfig, parseDelayResult, parseUnknownOutboundTypes } from '../src/services/probeFormat.js';
 import { load as yamlLoad } from 'js-yaml';
 
@@ -373,6 +373,17 @@ ok(quanRendered.includes('[filter_remote]') && !quanRendered.includes('<PROXY_NA
   ok(sanitizeBody({}) === null && sanitizeBody(null) === null && sanitizeBody(Buffer.from('x')) === null, 'sanitizeBody empty/buffer -> null');
   const longStr = sanitizeBody({ content: 'a'.repeat(500) });
   ok(JSON.parse(longStr).content.length <= 301, 'sanitizeBody truncates long strings');
+
+  // natural-language explanation of an audit row
+  const e1 = explainAudit({ method: 'PUT', path: '/api/users/5', action: '修改用户 #5', status: 200,
+    detail: JSON.stringify({ enabled: false, traffic_limit: 53687091200 }) });
+  ok(e1.includes('修改用户 #5') && e1.includes('启用状态→停用') && e1.includes('流量上限→50 GB'), `explainAudit user -> ${e1}`);
+  const e2 = explainAudit({ method: 'POST', path: '/api/auth/login', status: 401, detail: JSON.stringify({ username: 'admin', password: '***' }) });
+  ok(e2.includes('admin') && e2.includes('登录失败'), `explainAudit login fail -> ${e2}`);
+  const e3 = explainAudit({ method: 'POST', path: '/api/airports/3/fetch', action: '机场 #3 · 拉取', status: 200, detail: null });
+  ok(e3 === '机场 #3 · 拉取', `explainAudit no-body -> ${e3}`);
+  const e4 = explainAudit({ method: 'DELETE', path: '/api/users/9', action: '删除用户 #9', status: 500, detail: null });
+  ok(e4.includes('删除用户 #9') && e4.includes('操作失败'), `explainAudit failed -> ${e4}`);
 }
 
 // --- availability probe: signature dedup + sing-box config + delay parsing ---

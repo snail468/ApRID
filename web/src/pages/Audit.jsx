@@ -61,6 +61,7 @@ export default function Audit({ toast }) {
                     <th className="nosort">时间</th>
                     <th className="nosort">操作者</th>
                     <th className="nosort">动作</th>
+                    <th className="nosort">说明</th>
                     <th className="nosort">方法</th>
                     <th className="nosort">结果</th>
                     <th className="nosort">来源 IP</th>
@@ -73,6 +74,7 @@ export default function Audit({ toast }) {
                       <td className="small mono">{fmtDateTime(r.created_at)}</td>
                       <td>{r.actor || <span className="muted">-</span>}</td>
                       <td>{r.action}</td>
+                      <td className="small muted" style={{ maxWidth: 320 }}>{r.explain || '-'}</td>
                       <td><span className={`badge ${methodClass(r.method)}`}>{r.method}</span></td>
                       <td>{statusBadge(r.status)}</td>
                       <td className="small mono muted">{r.ip || '-'}</td>
@@ -87,6 +89,7 @@ export default function Audit({ toast }) {
               {rows.map((r) => (
                 <div className="mcard" key={r.id}>
                   <div className="mrow"><strong>{r.action}</strong>{statusBadge(r.status)}</div>
+                  {r.explain && <div className="mrow small muted" style={{ marginTop: -2 }}>{r.explain}</div>}
                   <div className="mrow"><span className="k">时间</span><span className="small">{fmtDateTime(r.created_at)}</span></div>
                   <div className="mrow"><span className="k">操作者</span><span>{r.actor || '-'}</span></div>
                   <div className="mrow"><span className="k">方法 / IP</span><span className="small mono">{r.method} · {r.ip || '-'}</span></div>
@@ -109,6 +112,13 @@ export default function Audit({ toast }) {
         <Modal title={`详情 · ${detail.action}`} onClose={() => setDetail(null)}
           footer={<button className="btn" onClick={() => setDetail(null)}>关闭</button>}>
           <div className="muted small" style={{ marginBottom: 8 }}>{detail.method} {detail.path}</div>
+          {detail.explain && (
+            <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 8, background: 'var(--card-bg-alt, rgba(59,130,246,.08))' }}>
+              <div className="small" style={{ fontWeight: 600, marginBottom: 4 }}>📝 自然语言说明</div>
+              <div className="small">{detail.explain}</div>
+            </div>
+          )}
+          <div className="small muted" style={{ marginBottom: 4 }}>原始请求详情（JSON，敏感字段已脱敏）</div>
           <pre className="mono small" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0 }}>
             {prettyJson(detail.detail)}
           </pre>

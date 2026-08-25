@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { API } from '../api.js';
-import { fmtDate, useConfirm } from '../ui.jsx';
+import { fmtDate, fmtDateTime, useConfirm } from '../ui.jsx';
+import { CronEditor } from '../cronEditor.jsx';
 
 export default function Settings({ toast, onAccountChange }) {
   const [settings, setSettings] = useState(null);
@@ -19,6 +20,7 @@ export default function Settings({ toast, onAccountChange }) {
         <AdminPathCard toast={toast} />
         <DeliveryCard toast={toast} />
         <BackupCard toast={toast} />
+        <OffsiteBackupCard toast={toast} />
         <TwoFACard settings={settings} toast={toast} reload={load} />
         <DevicesCard toast={toast} />
       </div>
@@ -348,6 +350,107 @@ function BackupCard({ toast }) {
         <input ref={fileRef} type="file" accept=".db" style={{ display: 'none' }} onChange={(e) => doRestore(e.target.files[0])} />
       </div>
       {confirmNode}
+    </div>
+  );
+}
+
+function OffsiteBackupCard({ toast }) {
+  const [cfg, setCfg] = useState(null);
+  const [schedule, setSchedule] = useState(null);
+  const [last, setLast] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [backing, setBacking] = useState(false);
+
+  const load = useCallback(() => API.getOffsiteBackup().then((r) => {
+    setCfg(r.config); setSchedule(r.schedule); setLast(r.last || null);
+  }).catch((e) => toast.error(e.message)), [toast]);
+  useEffect(() => { load(); }, [load]);
+
+  if (!cfg) return <div className="card"><h3 style={{ marginTop: 0 }}>☁️ 异地备份</h3><div className="muted small"><span className="spin" /></div></div>;
+  const set = (k, v) => setCfg((c) => ({ ...c, [k]: v }));
+
+  const saveCfg = async () => {
+    setSaving(true);
+    try { const r = await API.saveOffsiteBackup({ config: cfg }); setCfg(r.config); toast.success('异地备份设置已保存'); }
+    catch (e) { toast.error(e.message); } finally { setSaving(false); }
+  };
+  const test = async () => {
+    setTesting(true);
+    try { const r = await API.testOffsiteBackup(cfg); toast.success(`连通正常：${r.note || 'OK'}`); }
+    catch (e) { toast.error(e.message); } finally { setTesting(false); }
+  };
+  const runNow = async () => {
+    setBacking(true);
+    try { const r = await API.runOffsiteBackup(); toast.success(`备份已上传：${r.filename}`); load(); }
+    catch (e) { toast.error(e.message); } finally { setBacking(false); }
+  };
+  const saveSchedule = async (sc) => {
+    try {
+      // 先保存当前配置（含未保存的地址/密码），再保存定时，避免定时触发时用到旧配置
+      const r = await API.saveOffsiteBackup({ config: cfg, schedule: sc });
+      setCfg(r.config); setSchedule(r.schedule);
+      toast.success('定时设置已保存');
+    } catch (e) { toast.error(e.message); }
+  };
+
+  return (
+    <div className="card">
+      <h3 style={{ marginTop: 0 }}>☁️ 异地备份</h3>
+      <p className="muted small">
+        定期把完整数据库快照上传到 <strong>WebDAV</strong>（坚果云 / Nextcloud / InfiniCLOUD 等）或<strong>自定义 HTTP 端点</strong>，
+        异地留底防止本机数据丢失。密码仅存于本面板、脱敏显示。快照与「下载备份」内容一致（机场/用户/模板/设置全在内）。
+      </p>
+
+      <div className="field">
+        <label>备份方式</label>
+        <select value={cfg.provider} onChange={(e) => set('provider', e.target.value)} style={{ width: 200 }}>
+          <option value="webdav">WebDAV</option>
+          <option value="http">自定义 HTTP 端点</option>
+        </select>
+      </div>
+      <div className="field">
+        <label>{cfg.provider === 'http' ? '上传端点 URL（文件以 PUT/POST 上传，文件名在 X-Filename 头）' : 'WebDAV 目录 URL（需指向一个已存在的目录，以 / 结尾）'}</label>
+        <input className="mono" value={cfg.url || ''} onChange={(e) => set('url', e.target.value)}
+          placeholder={cfg.provider === 'http' ? 'https://example.com/upload' : 'https://dav.jianguoyun.com/dav/aprid-backup/'} />
+      </div>
+      <div className="field-row">
+        <div className="field"><label>账号（Basic 认证，可空）</label><input value={cfg.username || ''} onChange={(e) => set('username', e.target.value)} autoComplete="off" /></div>
+        <div className="field"><label>密码 / 令牌（留空不改）</label><input type="password" value={cfg.password || ''} onChange={(e) => set('password', e.target.value)} autoComplete="new-password" /></div>
+      </div>
+      {cfg.provider === 'http' ? (
+        <div className="field-row">
+          <div className="field"><label>HTTP 方法</label>
+            <select value={cfg.method} onChange={(e) => set('method', e.target.value)}>
+              <option value="PUT">PUT</option>
+              <option value="POST">POST</option>
+            </select>
+          </div>
+        </div>
+      ) : (
+        <div className="field-row">
+          <div className="field"><label>保留最近份数（0=不清理旧备份）</label>
+            <input type="number" min="0" max="365" value={cfg.keep ?? 7} onChange={(e) => set('keep', Number(e.target.value))} />
+          </div>
+        </div>
+      )}
+
+      <div className="btn-row" style={{ marginTop: 8 }}>
+        <button className="btn primary" onClick={saveCfg} disabled={saving}>{saving ? <span className="spin" /> : '保存设置'}</button>
+        <button className="btn" onClick={test} disabled={testing}>{testing ? <span className="spin" /> : '测试连通'}</button>
+        <button className="btn" onClick={runNow} disabled={backing}>{backing ? <span className="spin" /> : '立即备份'}</button>
+      </div>
+
+      {last && (
+        <div className="muted small" style={{ marginTop: 10 }}>
+          上次备份：{fmtDateTime(last.created_at)} · {last.status === 'success' ? <span className="ok-text">成功</span> : last.status === 'failed' ? <span className="err-text">失败</span> : last.status}
+        </div>
+      )}
+
+      <div style={{ marginTop: 12, borderTop: '1px solid var(--border, #2a2f37)', paddingTop: 12 }}>
+        <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>⏱ 定时自动备份</div>
+        <CronEditor schedule={schedule} onSave={saveSchedule} />
+      </div>
     </div>
   );
 }

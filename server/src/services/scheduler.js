@@ -1,5 +1,5 @@
 import { getSetting, setSetting } from '../db.js';
-import { runAllAirportResets, runTrafficStats, runAlertCheck, runLatencyCheck, runTrafficReset, runProbeCheck, runZombieCleanup } from './automation.js';
+import { runAllAirportResets, runTrafficStats, runAlertCheck, runLatencyCheck, runTrafficReset, runProbeCheck, runZombieCleanup, runOffsiteBackup } from './automation.js';
 import { cronMatch, isValidCron, describeCron } from './cron.js';
 
 // Lightweight in-process scheduler for the automations. Config lives in the
@@ -26,6 +26,8 @@ export const DEFAULT_SCHEDULES = {
   // 告警的时间驱动条件（到期/即将到期）无事件可挂，只能定期看钟。默认每小时开启，
   // 现在也走交互式 Cron，管理员可自行改。事件驱动条件（超限/机场用量）不受此影响。
   alerts: { enabled: true, cron: '0 * * * *' },
+  // 异地备份：生成数据库快照并上传到 WebDAV/HTTP。默认关闭（需在设置页配置地址）。
+  offsite_backup: { enabled: false, cron: '30 4 * * *' },
 };
 
 const RUNNERS = {
@@ -36,6 +38,7 @@ const RUNNERS = {
   probe: () => runProbeCheck(getSchedules().probe.airports),
   zombie_cleanup: () => runZombieCleanup(getSchedules().zombie_cleanup),
   alerts: () => runAlertCheck({ recordEmpty: false }),
+  offsite_backup: runOffsiteBackup,
 };
 
 // Legacy → cron migration: older installs stored {type:'daily',hour,minute} or

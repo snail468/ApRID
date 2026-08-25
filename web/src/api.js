@@ -58,6 +58,11 @@ export const API = {
   backupUrl: '/api/settings/backup',
   restoreDb: (file) => fetch('/api/settings/restore', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/octet-stream' }, body: file })
     .then(async (r) => { const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || '恢复失败'); return d; }),
+  // 异地备份（WebDAV / HTTP）
+  getOffsiteBackup: () => api.get('/api/settings/offsite-backup'),
+  saveOffsiteBackup: (b) => api.put('/api/settings/offsite-backup', b),
+  testOffsiteBackup: (config) => api.post('/api/settings/offsite-backup/test', { config }),
+  runOffsiteBackup: () => api.post('/api/settings/offsite-backup/run', {}),
   // 套餐
   plans: () => api.get('/api/plans'),
   createPlan: (b) => api.post('/api/plans', b),

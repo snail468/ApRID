@@ -2,7 +2,6 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import qrcode from 'qrcode';
 import fs from 'node:fs';
-import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { authenticator } from 'otplib';
 import { db, getSetting, setSetting } from '../db.js';
@@ -11,6 +10,9 @@ import { requireAuth } from '../middleware/auth.js';
 import { getNotifyConfigMasked, saveNotifyConfig, unmaskPatch, sendTestNotification } from '../services/notify.js';
 import { DEFAULT_GLOBAL_EXCLUDE } from '../services/nodeProcess.js';
 import { sanitizeAdminSlug } from '../services/util.js';
+import { getBackupConfig, getBackupConfigMasked, saveBackupConfig, unmaskBackupPatch, testBackupConnection, makeSnapshot } from '../services/backup.js';
+import { runOffsiteBackup } from '../services/automation.js';
+import { getSchedules, setSchedules, describeSchedule } from '../services/scheduler.js';
 
 const router = express.Router();
 router.use(requireAuth);
@@ -19,15 +21,13 @@ router.use(requireAuth);
 // Backup: VACUUM INTO makes a consistent single-file snapshot (WAL-safe), streamed
 // as a download; the temp copy is removed afterwards.
 router.get('/backup', (req, res) => {
-  const tmp = path.join(path.dirname(config.dbPath), `.backup-${Date.now()}.db`);
+  let snap;
   try {
-    db.exec(`VACUUM INTO '${tmp.replace(/'/g, "''")}'`);
+    snap = makeSnapshot();
   } catch (err) {
     return res.status(500).json({ error: '备份失败：' + err.message });
   }
-  const d = new Date();
-  const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
-  res.download(tmp, `aprid-backup-${stamp}.db`, () => { fs.unlink(tmp, () => {}); });
+  res.download(snap.path, snap.filename, () => { fs.unlink(snap.path, () => {}); });
 });
 
 // Restore: accept a raw .db upload, verify it's a valid SQLite DB with our schema,
@@ -63,6 +63,48 @@ router.post('/restore', express.raw({ type: '*/*', limit: '200mb' }), (req, res)
     }
     process.exit(0);
   }, 600);
+});
+
+// ---- 异地备份（WebDAV / HTTP 自动上传数据库快照） ----
+// 配置 + 定时（复用自动化调度器的 offsite_backup）+ 最近一次任务，一次返回。
+router.get('/offsite-backup', (req, res) => {
+  const schedule = getSchedules().offsite_backup;
+  const last = db.prepare("SELECT * FROM tasks WHERE type = 'offsite_backup' ORDER BY id DESC LIMIT 1").get();
+  res.json({
+    config: getBackupConfigMasked(),
+    schedule,
+    scheduleText: describeSchedule(schedule),
+    last: last || null,
+  });
+});
+
+router.put('/offsite-backup', (req, res) => {
+  const body = req.body || {};
+  saveBackupConfig(unmaskBackupPatch(body.config || {}));
+  let schedule = getSchedules().offsite_backup;
+  if (body.schedule) schedule = setSchedules({ offsite_backup: body.schedule }).offsite_backup;
+  res.json({ ok: true, config: getBackupConfigMasked(), schedule, scheduleText: describeSchedule(schedule) });
+});
+
+// 测试连通：用已存配置叠加本次未保存的改动（脱敏还原）后再测，便于填好即测。
+router.post('/offsite-backup/test', async (req, res) => {
+  try {
+    const merged = { ...getBackupConfig(), ...unmaskBackupPatch(req.body?.config || {}) };
+    const r = await testBackupConnection(merged);
+    res.json({ ok: true, ...r });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// 立即执行一次异地备份（记入任务日志）。
+router.post('/offsite-backup/run', async (req, res) => {
+  try {
+    const r = await runOffsiteBackup();
+    res.json({ ok: true, ...r });
+  } catch (err) {
+    res.status(400).json({ error: err.message, taskId: err.taskId });
+  }
 });
 
 // ---- 全局节点正则排除 ----
