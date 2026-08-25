@@ -11,7 +11,7 @@ router.use(requireAuth);
 
 const FIELDS = ['name', 'url', 'account', 'password', 'sub_url', 'panel_type',
   'request_headers', 'user_agent', 'cookie', 'auth_token', 'proxy', 'group_name', 'remark', 'node_filter',
-  'expire_at', 'used_traffic', 'total_traffic', 'reset_mode', 'flaresolverr_url',
+  'expire_at', 'used_traffic', 'total_traffic', 'reset_mode',
   'cost', 'cost_amount', 'cost_cycle_days', 'cost_type'];
 
 function normalize(body) {

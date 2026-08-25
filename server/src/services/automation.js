@@ -31,7 +31,7 @@ export async function runAirportReset(airportId) {
   try {
     const ap = db.prepare('SELECT * FROM airports WHERE id = ?').get(airportId);
     if (!ap) throw new Error('机场不存在');
-    appendLog(taskId, `开始重置机场「${ap.name}」订阅 (${ap.panel_type}${ap.reset_mode === 'flaresolverr' ? ' · FlareSolverr' : ''})`);
+    appendLog(taskId, `开始重置机场「${ap.name}」订阅 (${ap.panel_type})`);
 
     const { subUrl, detected, changed } = await resetAirportSubscription(ap, { log: (line) => appendLog(taskId, line) });
     if (detected) appendLog(taskId, `通用适配器识别面板类型：${detected}`);

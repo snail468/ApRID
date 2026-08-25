@@ -211,7 +211,6 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
     user_agent: airport.user_agent || '', cookie: airport.cookie || '',
     auth_token: airport.auth_token || '',
     reset_mode: airport.reset_mode || 'http',
-    flaresolverr_url: airport.flaresolverr_url || '',
     request_headers: safeParse(airport.request_headers),
     node_filter: safeParse(airport.node_filter),
     expire_at: toDatetimeLocal(airport.expire_at),
@@ -298,26 +297,10 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
           <label>重置方式</label>
           <select value={f.reset_mode} onChange={(e) => set('reset_mode', e.target.value)}>
             <option value="http">HTTP 轻量（默认，直接请求接口）</option>
-            <option value="flaresolverr">FlareSolverr（推荐，专治 Cloudflare）</option>
             <option value="manual">手动重置（半自动，自己登录后粘贴新链接）</option>
           </select>
         </div>
-        {f.reset_mode === 'flaresolverr' && (
-          <div className="field">
-            <label>FlareSolverr 地址（留空=用默认侧车）</label>
-            <input value={f.flaresolverr_url} onChange={(e) => set('flaresolverr_url', e.target.value)} placeholder="http://flaresolverr:8191" />
-          </div>
-        )}
       </div>
-      {f.reset_mode === 'flaresolverr' && (
-        <div className="muted small" style={{ marginTop: -6, marginBottom: 4 }}>
-          FlareSolverr 用真实浏览器解开 Cloudflare，取回 cf_clearance 与匹配 UA 写回本机场，再走 HTTP 完成登录+重置——
-          面板与 FlareSolverr 同出口 IP，cf_clearance 有效，可稳定绕过 CF「Just a moment」。需在 docker-compose 里启用
-          <code>flaresolverr</code> 服务。仍要填账号密码或登录令牌。请先用「自动化」页「测试」验证。
-          <br />强挑战站点（如魔戒）若报“解挑战超时”：① 调大 <code>FLARESOLVERR_TIMEOUT</code>（如 180000）；
-          ② 给上方「拉取代理」配一个干净/住宅代理——机房 IP 常被加强挑战，配代理后 FlareSolverr 与重置会走同一代理，成功率更高。
-        </div>
-      )}
       {f.reset_mode === 'manual' && (
         <div className="muted small" style={{ marginTop: -6, marginBottom: 4 }}>
           手动重置模式：面板不再自动登录。当某机场 Cloudflare 无法自动绕过时用它——在机场列表点「手动重置」，

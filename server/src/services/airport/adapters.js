@@ -1,5 +1,4 @@
 import { detectChallenge, ANTIBOT_HINT } from './antibot.js';
-import { applyClearance } from './flaresolverr.js';
 import { proxyDispatcher, xfetch } from './proxy.js';
 
 const UA = (ap) => ap.user_agent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
@@ -328,8 +327,7 @@ async function sspanelTest(ap) {
   return { ok: true, via: '账号密码登录', subUrl: null, note: '登录成功（SSPanel）；重置链接需实际运行才能确认' };
 }
 
-// HTTP-adapter dispatch by panel type — shared by plain HTTP mode and the
-// FlareSolverr mode (which first injects cf_clearance, then reuses these).
+// HTTP-adapter dispatch by panel type.
 function httpResetByType(ap) {
   switch (ap.panel_type) {
     case 'v2board':
@@ -372,9 +370,7 @@ export async function testAirportConnection(ap) {
   if (!ap.auth_token && (!ap.account || !ap.password)) {
     throw new Error('机场未配置登录账号或密码（或改用「登录令牌」直连）');
   }
-  let target = ap;
-  if (ap.reset_mode === 'flaresolverr') target = await applyClearance(ap);
-  return httpTestByType(target);
+  return httpTestByType(ap);
 }
 
 export async function resetAirportSubscription(ap, { log } = {}) {
@@ -387,12 +383,5 @@ export async function resetAirportSubscription(ap, { log } = {}) {
   if (!ap.auth_token && (!ap.account || !ap.password)) {
     throw new Error('机场未配置登录账号或密码（或改用「登录令牌」直连）');
   }
-  // FlareSolverr mode: solve Cloudflare first, inject cf_clearance + UA, then run
-  // the normal HTTP adapter (login + reset) through the cleared session.
-  let target = ap;
-  if (ap.reset_mode === 'flaresolverr') {
-    target = await applyClearance(ap, log);
-    log?.('FlareSolverr 就绪，改用 HTTP 适配器完成登录并重置');
-  }
-  return httpResetByType(target);
+  return httpResetByType(ap);
 }

@@ -38,8 +38,7 @@ export function detectChallenge(status, text = '', headers = null) {
 
 export const ANTIBOT_HINT =
   '该机场疑似启用了人机验证/安全防护，自动程序被拦截。处理建议：' +
-  '① 换用 FlareSolverr 重置方式，并给机场配一个干净/住宅代理（FlareSolverr 与重置走同一代理）；' +
-  '② 在浏览器登录后从任意接口请求头复制 Authorization，填入机场「登录令牌」跳过登录；' +
-  '③ 从浏览器复制 Cookie（含 cf_clearance）填入「Cookie」字段；' +
-  '④【推荐兜底】若该站按 TLS/客户端指纹识别（如魔戒等大站），以上都可能仍被拦——' +
+  '① 在浏览器登录后从任意接口请求头复制 Authorization，填入机场「登录令牌」跳过登录；' +
+  '② 从浏览器复制 Cookie（含 cf_clearance）填入「Cookie」字段；' +
+  '③【推荐兜底】若该站按 TLS/客户端指纹识别（如魔戒等大站），以上都可能仍被拦——' +
   '把机场「自动重置方式」改为「手动重置」：自己浏览器登录重置后粘贴新链接，面板自动保存+拉取+下发，只有点一下重置是手动的。';

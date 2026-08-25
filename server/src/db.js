@@ -235,8 +235,8 @@ function ensureColumns(table, columns) {
 }
 ensureColumns('airports', {
   user_agent: 'TEXT', cookie: 'TEXT', auth_token: 'TEXT',
-  // reset_mode: 'http' (default) | 'flaresolverr' | 'manual'
-  reset_mode: "TEXT DEFAULT 'http'", flaresolverr_url: 'TEXT',
+  // reset_mode: 'http' (default) | 'manual'
+  reset_mode: "TEXT DEFAULT 'http'",
   // monotonic cumulative used traffic (bytes) that survives airport-side resets,
   // plus the last raw reading used to detect a reset (a drop in reported usage);
   // alert dedup state for the 到期/超限告警 automation.
