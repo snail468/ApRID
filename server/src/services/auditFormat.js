@@ -14,7 +14,7 @@ const RESOURCE = {
 
 // trailing action segment → CN verb (for POSTs that aren't plain creates).
 const ACTION_WORD = {
-  fetch: '拉取', reset: '重置', 'manual-reset': '手动重置', renew: '续费',
+  fetch: '拉取', reset: '重置', 'manual-reset': '手动重置', clone: '加账户', renew: '续费',
   latency: '延迟检测', restore: '恢复数据库', backup: '备份数据库',
   toggle: '切换启用', group: '分组', delete: '删除', login: '登录',
   'test-reset': '测试重置', 'airport-reset': '机场重置', 'traffic-stats': '流量统计',
@@ -55,7 +55,7 @@ const FIELD_LABEL = {
   template_id: '模板', group_name: '分组', remark: '备注', token: '订阅令牌',
   traffic_limit: '流量上限', traffic_reset_day: '每月流量重置日', node_filter: '节点过滤',
   price: '价格', plan_name: '套餐', days: '时长', traffic_gb: '流量',
-  url: '网址', account: '账号', sub_url: '订阅链接', panel_type: '面板类型',
+  url: '网址', account: '账号', account_label: '账户别名', sub_url: '订阅链接', panel_type: '面板类型',
   reset_mode: '重置方式', proxy: '代理', user_agent: 'User-Agent', cookie: 'Cookie',
   cost_amount: '成本金额', cost_cycle_days: '成本周期(天)', cost_type: '成本类型', note: '备注',
   client_type: '客户端类型', content: '模板内容', is_default: '默认模板', kind: '类型',

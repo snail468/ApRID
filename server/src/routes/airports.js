@@ -9,10 +9,16 @@ import { airportTrend } from '../services/accounting.js';
 const router = express.Router();
 router.use(requireAuth);
 
-const FIELDS = ['name', 'url', 'account', 'password', 'sub_url', 'panel_type',
+const FIELDS = ['name', 'url', 'account', 'account_label', 'password', 'sub_url', 'panel_type',
   'request_headers', 'user_agent', 'cookie', 'auth_token', 'proxy', 'group_name', 'remark', 'node_filter',
   'expire_at', 'used_traffic', 'total_traffic', 'reset_mode',
   'cost', 'cost_amount', 'cost_cycle_days', 'cost_type'];
+
+// fields inherited when cloning an airport to add another account for the *same*
+// provider: they describe the panel/pull/processing, not the individual account.
+// Everything else (account/密码/订阅/令牌/用量/到期) is per-account and starts blank.
+const CLONE_SHARED = ['name', 'url', 'panel_type', 'request_headers', 'user_agent',
+  'proxy', 'group_name', 'node_filter', 'reset_mode', 'remark', 'cost_type'];
 
 function normalize(body) {
   const out = {};
@@ -85,6 +91,29 @@ router.post('/', (req, res) => {
   const info = db.prepare(
     `INSERT INTO airports (${cols.join(',')}, created_at, updated_at) VALUES (${cols.map(() => '?').join(',')}, ?, ?)`
   ).run(...cols.map((c) => data[c]), now, now);
+  res.json(db.prepare('SELECT * FROM airports WHERE id = ?').get(info.lastInsertRowid));
+});
+
+// clone an existing airport into a new account of the same provider: copy the
+// shared panel/pull/processing config, take fresh account credentials from the
+// body, and never carry over订阅/令牌/用量/到期 (those belong to the old account).
+router.post('/:id/clone', (req, res) => {
+  const src = db.prepare('SELECT * FROM airports WHERE id = ?').get(req.params.id);
+  if (!src) return res.status(404).json({ error: '源机场不存在' });
+  const b = req.body || {};
+  const row = {};
+  for (const f of CLONE_SHARED) row[f] = src[f];
+  row.account = b.account ?? '';
+  row.password = b.password ?? '';
+  row.sub_url = b.sub_url ?? '';
+  row.auth_token = b.auth_token ?? '';
+  row.cookie = b.cookie ?? '';
+  row.account_label = b.account_label ?? '';
+  const now = Date.now();
+  const cols = Object.keys(row);
+  const info = db.prepare(
+    `INSERT INTO airports (${cols.join(',')}, created_at, updated_at) VALUES (${cols.map(() => '?').join(',')}, ?, ?)`
+  ).run(...cols.map((c) => row[c]), now, now);
   res.json(db.prepare('SELECT * FROM airports WHERE id = ?').get(info.lastInsertRowid));
 });
 

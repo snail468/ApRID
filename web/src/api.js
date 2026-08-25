@@ -89,6 +89,7 @@ export const API = {
   airports: () => api.get('/api/airports'),
   detectPanel: (b) => api.post('/api/airports/detect', b),
   createAirport: (b) => api.post('/api/airports', b),
+  cloneAirport: (id, b) => api.post(`/api/airports/${id}/clone`, b),
   updateAirport: (id, b) => api.put(`/api/airports/${id}`, b),
   deleteAirport: (id) => api.del(`/api/airports/${id}`),
   batchDeleteAirports: (ids) => api.post('/api/airports/batch/delete', { ids }),

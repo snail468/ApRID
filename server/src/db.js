@@ -235,6 +235,8 @@ function ensureColumns(table, columns) {
 }
 ensureColumns('airports', {
   user_agent: 'TEXT', cookie: 'TEXT', auth_token: 'TEXT',
+  // short alias to tell同机场多账户 apart (主号 / 小号 / A), used across list &下发
+  account_label: 'TEXT',
   // reset_mode: 'http' (default) | 'manual'
   reset_mode: "TEXT DEFAULT 'http'",
   // monotonic cumulative used traffic (bytes) that survives airport-side resets,

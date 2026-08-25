@@ -363,6 +363,7 @@ ok(quanRendered.includes('[filter_remote]') && !quanRendered.includes('<PROXY_NA
   ok(describeAction('POST', '/api/airports') === '新增机场', `describeAction create airport -> ${describeAction('POST', '/api/airports')}`);
   ok(describeAction('PUT', '/api/airports/3') === '修改机场 #3', `describeAction update airport -> ${describeAction('PUT', '/api/airports/3')}`);
   ok(describeAction('POST', '/api/airports/3/fetch') === '机场 #3 · 拉取', `describeAction airport fetch -> ${describeAction('POST', '/api/airports/3/fetch')}`);
+  ok(describeAction('POST', '/api/airports/3/clone') === '机场 #3 · 加账户', `describeAction airport clone -> ${describeAction('POST', '/api/airports/3/clone')}`);
   ok(describeAction('POST', '/api/users/batch/delete') === '用户 · 批量删除', `describeAction batch delete -> ${describeAction('POST', '/api/users/batch/delete')}`);
   ok(describeAction('POST', '/api/settings/account') === '设置 · 修改账户', `describeAction account -> ${describeAction('POST', '/api/settings/account')}`);
   ok(describeAction('POST', '/api/nodes/latency') === '节点 · 延迟检测', `describeAction latency -> ${describeAction('POST', '/api/nodes/latency')}`);

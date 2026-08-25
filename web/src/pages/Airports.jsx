@@ -19,6 +19,7 @@ export default function Airports({ toast }) {
   const { data: rows = [], loading, refresh } = useCachedResource('airports', () => API.airports());
   const { data: groups = [], refresh: refreshGroups } = useCachedResource('groups:airport', () => API.groups('airport'));
   const [editing, setEditing] = useState(null);
+  const [cloneFrom, setCloneFrom] = useState(null);
   const [manual, setManual] = useState(null);
   const [costAirport, setCostAirport] = useState(null);
   const [busy, setBusy] = useState({});
@@ -27,7 +28,7 @@ export default function Airports({ toast }) {
   const [confirm, confirmNode] = useConfirm();
 
   const load = () => refresh();
-  const t = useTable(rows, { searchKeys: ['name', 'url', 'account', 'group_name', 'remark'], initialSort: { key: 'id', dir: 'desc' } });
+  const t = useTable(rows, { searchKeys: ['name', 'url', 'account', 'account_label', 'group_name', 'remark'], initialSort: { key: 'id', dir: 'desc' } });
   const setRowBusy = (id, v) => setBusy((b) => ({ ...b, [id]: v }));
 
   const doFetch = async (id) => {
@@ -115,7 +116,7 @@ export default function Airports({ toast }) {
                 {t.filtered.map((a) => (
                   <tr key={a.id}>
                     <td><input type="checkbox" checked={t.selected.has(a.id)} onChange={() => t.toggleSelect(a.id)} /></td>
-                    <td><strong>{a.name}</strong>{a.remark && <div className="muted small">{a.remark}</div>}</td>
+                    <td><strong>{a.name}</strong>{a.account_label && <span className="badge gray" style={{ marginLeft: 6 }}>{a.account_label}</span>}{a.remark && <div className="muted small">{a.remark}</div>}</td>
                     <td>{a.url ? <a href={a.url} target="_blank" rel="noreferrer">跳转 ↗</a> : '-'}</td>
                     <td>
                       {a.account ? (
@@ -134,6 +135,7 @@ export default function Airports({ toast }) {
                         { label: '拉取订阅', disabled: !!busy[a.id], onClick: () => doFetch(a.id) },
                         { label: '自动重置', disabled: !!busy[a.id], title: '后台自动登录重置', onClick: () => doReset(a.id) },
                         { label: '手动重置', title: '自己登录机场重置后粘贴新链接', onClick: () => setManual(a) },
+                        { label: '＋ 加账户', title: '以本机场为模板，新增一个同机场账户', onClick: () => setCloneFrom(a) },
                         { label: '成本/趋势', title: '成本记账与流量趋势', onClick: () => setCostAirport(a) },
                         { label: '编辑', onClick: () => setEditing(a) },
                         { label: '删除', danger: true, onClick: () => doDelete(a.id) },
@@ -150,7 +152,7 @@ export default function Airports({ toast }) {
       <div className="mobile-cards">
         {t.filtered.map((a) => (
           <div className="mcard" key={a.id}>
-            <div className="mrow"><strong>{a.name}</strong><span className="badge blue">{a.panel_type}</span></div>
+            <div className="mrow"><strong>{a.name}{a.account_label && <span className="badge gray" style={{ marginLeft: 6 }}>{a.account_label}</span>}</strong><span className="badge blue">{a.panel_type}</span></div>
             <div className="mrow"><span className="k">账户</span><span className="mono">{a.account || '-'}</span></div>
             <div className="mrow"><span className="k">节点</span><span>{a.node_count}</span></div>
             <div className="mrow"><span className="k">到期</span>{expireCell(a.expire_at)}</div>
@@ -168,6 +170,7 @@ export default function Airports({ toast }) {
       </div>
 
       {editing && <AirportModal airport={editing} groups={groups} toast={toast} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); refreshGroups(); }} />}
+      {cloneFrom && <CloneAccountModal source={cloneFrom} toast={toast} onClose={() => setCloneFrom(null)} onDone={(created) => { setCloneFrom(null); load(); if (created) setEditing(created); }} />}
       {manual && <ManualResetModal airport={manual} toast={toast} onClose={() => setManual(null)} onDone={() => { setManual(null); invalidate('nodes:'); load(); }} />}
       {costAirport && <CostTrendModal airport={costAirport} toast={toast} onClose={() => setCostAirport(null)} onChanged={load} />}
       {showGroups && <GroupManagerModal kind="airport" title="机场分组管理" toast={toast} onClose={() => setShowGroups(false)} onChanged={() => { refreshGroups(); load(); }} />}
@@ -205,6 +208,7 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
   const isNew = !airport.id;
   const [f, setF] = useState({
     name: airport.name || '', url: airport.url || '', account: airport.account || '',
+    account_label: airport.account_label || '',
     password: airport.password || '', sub_url: airport.sub_url || '',
     panel_type: airport.panel_type || 'generic', group_name: airport.group_name || '',
     remark: airport.remark || '', proxy: airport.proxy || '',
@@ -268,6 +272,7 @@ function AirportModal({ airport, groups, toast, onClose, onSaved }) {
         </div>
       </div>
       <div className="field"><label>机场网址</label><input value={f.url} onChange={(e) => set('url', e.target.value)} placeholder="https://example.com" /></div>
+      <div className="field"><label>账户别名（用于区分同机场多账户，如 主号 / 小号 / A）</label><input value={f.account_label} onChange={(e) => set('account_label', e.target.value)} placeholder="可留空" /></div>
       <div className="field-row">
         <div className="field"><label>机场账号</label><input value={f.account} onChange={(e) => set('account', e.target.value)} /></div>
         <div className="field"><label>机场密码</label><input value={f.password} onChange={(e) => set('password', e.target.value)} /></div>
@@ -450,7 +455,7 @@ function ManualResetModal({ airport, toast, onClose, onDone }) {
   };
 
   return (
-    <Modal title={`手动重置 · ${airport.name}`} onClose={onClose}
+    <Modal title={`手动重置 · ${airport.name}${airport.account_label ? ` / ${airport.account_label}` : ''}`} onClose={onClose}
       footer={<>
         <button className="btn" onClick={onClose}>取消</button>
         <button className="btn primary" onClick={submit} disabled={saving}>{saving ? <span className="spin" /> : '保存并拉取'}</button>
@@ -477,6 +482,47 @@ function ManualResetModal({ airport, toast, onClose, onDone }) {
         <input value={subUrl} onChange={(e) => setSubUrl(e.target.value)} placeholder="https://机场域名/api/v1/client/subscribe?token=..." />
       </div>
       {airport.sub_url && <div className="muted small">当前链接：{airport.sub_url}</div>}
+    </Modal>
+  );
+}
+
+/* ---------------- 加账户（克隆同机场为新账户）---------------- */
+function CloneAccountModal({ source, toast, onClose, onDone }) {
+  const [f, setF] = useState({ account_label: '', account: '', password: '', sub_url: '', auth_token: '' });
+  const [saving, setSaving] = useState(false);
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+
+  const submit = async (thenEdit) => {
+    setSaving(true);
+    try {
+      const created = await API.cloneAirport(source.id, f);
+      toast.success('已新增同机场账户');
+      onDone(thenEdit ? created : null);
+    } catch (e) { toast.error(e.message); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <Modal title={`加账户 · ${source.name}`} onClose={onClose}
+      footer={<>
+        <button className="btn" onClick={onClose}>取消</button>
+        <button className="btn" disabled={saving} onClick={() => submit(false)}>{saving ? <span className="spin" /> : '创建'}</button>
+        <button className="btn primary" disabled={saving} onClick={() => submit(true)} title="创建后直接打开编辑，可补拉取设置或立即重置">创建并编辑</button>
+      </>}>
+      <div className="muted small" style={{ marginBottom: 10 }}>
+        继承自 <strong>{source.name}</strong>：面板类型「{source.panel_type}」· 网址 {source.url || '（未填）'} ·
+        拉取设置 / 节点处理 / 重置方式 / 分组 已照抄。订阅链接、用量、到期、令牌、Cookie 不会复制，属于新账户。创建后可在「编辑」里调整。
+      </div>
+      <div className="field"><label>账户别名（用于区分，如 小号 / B）</label>
+        <input value={f.account_label} onChange={(e) => set('account_label', e.target.value)} placeholder="可留空" /></div>
+      <div className="field-row">
+        <div className="field"><label>机场账号</label><input value={f.account} onChange={(e) => set('account', e.target.value)} /></div>
+        <div className="field"><label>机场密码</label><input value={f.password} onChange={(e) => set('password', e.target.value)} /></div>
+      </div>
+      <div className="field"><label>订阅链接（可留空，之后自动/手动重置回填）</label>
+        <input value={f.sub_url} onChange={(e) => set('sub_url', e.target.value)} placeholder="https://机场域名/api/v1/client/subscribe?token=..." /></div>
+      <div className="field"><label>登录令牌 Authorization（可选，V2Board/Xboard 自动重置用）</label>
+        <input value={f.auth_token} onChange={(e) => set('auth_token', e.target.value)} placeholder="可留空" /></div>
     </Modal>
   );
 }

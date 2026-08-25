@@ -11,6 +11,8 @@ const STATUS_BADGE = { active: 'green', expiring: 'yellow', expired: 'red', exha
 const GB = 1024 * 1024 * 1024;
 
 function safeParse(s) { try { return JSON.parse(s || '{}'); } catch { return {}; } }
+// how to disambiguate同机场多账户: prefer the short别名, fall back to the account.
+const airportSuffix = (a) => (a.account_label || a.account || '');
 
 export default function Users({ toast }) {
   const { data: rows = [], loading, refresh } = useCachedResource('users', () => API.users());
@@ -103,7 +105,7 @@ export default function Users({ toast }) {
         </select>
         <select style={{ width: 160 }} value={airportFilter} onChange={(e) => setAirportFilter(e.target.value)} title="按关联机场筛选">
           <option value="">全部关联机场</option>
-          {airports.map((a) => <option key={a.id} value={a.id}>{a.name}{a.account ? ` / ${a.account}` : ''}</option>)}
+          {airports.map((a) => <option key={a.id} value={a.id}>{a.name}{airportSuffix(a) ? ` / ${airportSuffix(a)}` : ''}</option>)}
         </select>
         <div className="spacer" />
         {t.selected.size > 0 && (
@@ -322,7 +324,7 @@ function UserModal({ user, templates, airports, groups, toast, assignedByAirport
             return (
               <label key={a.id} className="chip-check" title={others.length ? `已下发给：${others.map((u) => u.name).join('、')}` : ''}>
                 <input type="checkbox" checked={f.airports.includes(a.id)} onChange={() => toggleAirport(a.id)} />
-                {a.name}{a.account ? <span className="muted"> / {a.account}</span> : ''}
+                {a.name}{airportSuffix(a) ? <span className="muted"> / {airportSuffix(a)}</span> : ''}
                 {others.length > 0 && <span className="badge gray" style={{ marginLeft: 4 }}>已下发{others.length}</span>}
               </label>
             );
