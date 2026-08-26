@@ -198,10 +198,15 @@ function fromClashProxy(p) {
       return { ...base, type: 'vless', raw: {
         uuid: p.uuid, network: p.network || 'tcp', tls: !!p.tls, sni: p.servername || '',
         flow: p.flow || '', path: p['ws-opts']?.path || '', host: p['ws-opts']?.headers?.Host || '',
+        serviceName: p['grpc-opts']?.['grpc-service-name'] || '',
+        pbk: p['reality-opts']?.['public-key'] || '', sid: p['reality-opts']?.['short-id'] || '',
+        fp: p['client-fingerprint'] || '',
       }};
     case 'trojan':
       return { ...base, type: 'trojan', raw: {
         password: p.password, sni: p.sni || '', network: p.network || 'tcp',
+        path: p['ws-opts']?.path || '', host: p['ws-opts']?.headers?.Host || '',
+        serviceName: p['grpc-opts']?.['grpc-service-name'] || '',
       }};
     case 'ss':
       return { ...base, type: 'ss', raw: { cipher: p.cipher, password: p.password }};

@@ -14,6 +14,27 @@ function safeParse(s) { try { return JSON.parse(s || '{}'); } catch { return {};
 // how to disambiguate同机场多账户: prefer the short别名, fall back to the account.
 const airportSuffix = (a) => (a.account_label || a.account || '');
 
+function AirportAssociation({ user, airports }) {
+  const ids = safeParse(user.node_filter).airports;
+  // An empty selection deliberately means that this user receives every airport.
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return <div className="user-airports"><span>关联机场：</span><em>全部机场</em></div>;
+  }
+  const byId = new Map(airports.map((a) => [Number(a.id), a]));
+  return (
+    <div className="user-airports" title="此用户订阅中包含的机场账户">
+      <span>关联机场：</span>
+      <span className="user-airport-tags">
+        {ids.map((id) => {
+          const airport = byId.get(Number(id));
+          const label = airport ? `${airport.name}${airportSuffix(airport) ? ` / ${airportSuffix(airport)}` : ''}` : `已删除机场 #${id}`;
+          return <span className="user-airport-tag" key={id}>{label}</span>;
+        })}
+      </span>
+    </div>
+  );
+}
+
 export default function Users({ toast }) {
   const { data: rows = [], loading, refresh } = useCachedResource('users', () => API.users());
   const { data: templates = [] } = useCachedResource('templates', () => API.templates());
@@ -145,7 +166,7 @@ export default function Users({ toast }) {
                 {t.filtered.map((u) => (
                   <tr key={u.id} className={`row-${u.status}`}>
                     <td><input type="checkbox" checked={t.selected.has(u.id)} onChange={() => t.toggleSelect(u.id)} /></td>
-                    <td><strong>{u.name}</strong></td>
+                    <td><strong>{u.name}</strong><AirportAssociation user={u} airports={airports} /></td>
                     <td><span className={`badge ${STATUS_BADGE[u.status]}`}>{STATUS_LABEL[u.status]}</span></td>
                     <td>{expireCell(u.expire_at, u.status)}</td>
                     <td><TrafficCell used={u.traffic_used} limit={u.traffic_limit} /></td>
@@ -173,7 +194,7 @@ export default function Users({ toast }) {
       <div className="mobile-cards">
         {t.filtered.map((u) => (
           <div className={`mcard row-${u.status}`} key={u.id}>
-            <div className="mrow"><strong>{u.name}</strong><span className={`badge ${STATUS_BADGE[u.status]}`}>{STATUS_LABEL[u.status]}</span></div>
+            <div className="mrow"><div><strong>{u.name}</strong><AirportAssociation user={u} airports={airports} /></div><span className={`badge ${STATUS_BADGE[u.status]}`}>{STATUS_LABEL[u.status]}</span></div>
             <div className="mrow"><span className="k">到期</span>{expireCell(u.expire_at, u.status)}</div>
             <div className="mrow"><span className="k">流量</span><TrafficCell used={u.traffic_used} limit={u.traffic_limit} /></div>
             <div className="mrow"><span className="k">最后订阅</span><span className="small muted">{u.last_sub_at ? fmtDateTime(u.last_sub_at) : '从未'}</span></div>

@@ -5,8 +5,29 @@ import { load as yamlLoad, dump as yamlDump } from 'js-yaml';
 
 const b64 = (s) => Buffer.from(s, 'utf8').toString('base64');
 
+// Prefer the source share URI when it is available.  A subscription relay must
+// not silently discard vendor / newer-core parameters it does not yet model
+// (for example XHTTP, gRPC serviceName, SS plugins, or uTLS options).  We only
+// replace the display name, which is deliberately changed by ApRID filters.
+function sourceUriWithName(n) {
+  const uri = String(n.uri || '').trim();
+  if (!/^\w[\w+.-]*:\/\//.test(uri)) return '';
+  if (uri.startsWith('vmess://')) {
+    try {
+      const raw = uri.slice('vmess://'.length);
+      const obj = JSON.parse(Buffer.from(raw.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
+      obj.ps = n.name;
+      return `vmess://${b64(JSON.stringify(obj))}`;
+    } catch { return uri; }
+  }
+  const cut = uri.indexOf('#');
+  return `${cut >= 0 ? uri.slice(0, cut) : uri}#${encodeURIComponent(n.name)}`;
+}
+
 // ---------------- Base64 (v2rayN / generic) ----------------
 function nodeToUri(n) {
+  const sourceUri = sourceUriWithName(n);
+  if (sourceUri) return sourceUri;
   const r = n.raw || {};
   const enc = encodeURIComponent;
   switch (n.type) {
@@ -83,6 +104,7 @@ function nodeToClash(n) {
       const p = { ...base, type: 'vmess', uuid: r.uuid, alterId: r.alterId || 0, cipher: r.cipher || 'auto' };
       if (r.tls) { p.tls = true; if (r.sni) p.servername = r.sni; }
       if (r.network === 'ws') p['ws-opts'] = { path: r.path || '/', headers: r.host ? { Host: r.host } : {} };
+      if (r.network === 'grpc') p['grpc-opts'] = { 'grpc-service-name': r.serviceName || '' };
       p.network = r.network || 'tcp';
       return p;
     }
@@ -91,6 +113,7 @@ function nodeToClash(n) {
       if (r.tls) { p.tls = true; if (r.sni) p.servername = r.sni; }
       if (r.flow) p.flow = r.flow;
       if (r.network === 'ws') p['ws-opts'] = { path: r.path || '/', headers: r.host ? { Host: r.host } : {} };
+      if (r.network === 'grpc') p['grpc-opts'] = { 'grpc-service-name': r.serviceName || '' };
       if (r.pbk) p['reality-opts'] = { 'public-key': r.pbk, 'short-id': r.sid || '' };
       if (r.fp) p['client-fingerprint'] = r.fp;
       return p;
@@ -98,7 +121,8 @@ function nodeToClash(n) {
     case 'trojan': {
       const p = { ...base, type: 'trojan', password: r.password };
       if (r.sni) p.sni = r.sni;
-      if (r.network === 'ws') p['ws-opts'] = { path: r.path || '/' };
+      if (r.network === 'ws') p['ws-opts'] = { path: r.path || '/', headers: r.host ? { Host: r.host } : {} };
+      if (r.network === 'grpc') p['grpc-opts'] = { 'grpc-service-name': r.serviceName || '' };
       return p;
     }
     case 'ss':
@@ -169,20 +193,25 @@ export function toClash(nodes, templateContent) {
 export function nodeToSingbox(n) {
   const r = n.raw || {};
   const tag = n.name;
+  const transport = () => {
+    if (r.network === 'ws') return { type: 'ws', path: r.path || '/', headers: r.host ? { Host: r.host } : {} };
+    if (r.network === 'grpc') return { type: 'grpc', service_name: r.serviceName || '' };
+    return null;
+  };
+  const tls = (required = false) => ({ enabled: required || !!r.tls, server_name: r.sni || n.server,
+    ...(r.fp ? { utls: { enabled: true, fingerprint: r.fp } } : {}),
+    ...(r.pbk ? { reality: { enabled: true, public_key: r.pbk, short_id: r.sid || '' } } : {}) });
   switch (n.type) {
     case 'vmess':
       return { type: 'vmess', tag, server: n.server, server_port: n.port, uuid: r.uuid,
         alter_id: r.alterId || 0, security: r.cipher || 'auto',
-        ...(r.tls ? { tls: { enabled: true, server_name: r.sni || n.server } } : {}),
-        ...(r.network === 'ws' ? { transport: { type: 'ws', path: r.path || '/', headers: r.host ? { Host: r.host } : {} } } : {}) };
+        ...(r.tls ? { tls: tls() } : {}), ...(transport() ? { transport: transport() } : {}) };
     case 'vless':
       return { type: 'vless', tag, server: n.server, server_port: n.port, uuid: r.uuid, flow: r.flow || '',
-        ...(r.tls ? { tls: { enabled: true, server_name: r.sni || n.server,
-          ...(r.pbk ? { reality: { enabled: true, public_key: r.pbk, short_id: r.sid || '' } } : {}) } } : {}),
-        ...(r.network === 'ws' ? { transport: { type: 'ws', path: r.path || '/' } } : {}) };
+        ...(r.tls ? { tls: tls() } : {}), ...(transport() ? { transport: transport() } : {}) };
     case 'trojan':
       return { type: 'trojan', tag, server: n.server, server_port: n.port, password: r.password,
-        tls: { enabled: true, server_name: r.sni || n.server } };
+        tls: tls(true), ...(transport() ? { transport: transport() } : {}) };
     case 'ss':
       return { type: 'shadowsocks', tag, server: n.server, server_port: n.port, method: r.cipher, password: r.password };
     case 'hysteria2':

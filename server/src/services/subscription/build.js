@@ -45,7 +45,7 @@ export function collectUserNodes(user) {
   const collected = [];
   for (const ap of airports) {
     let nodes = db.prepare('SELECT * FROM nodes WHERE airport_id = ?').all(ap.id)
-      .map((row) => ({ name: row.name, type: row.type, server: row.server, port: row.port, raw: safeJson(row.raw),
+      .map((row) => ({ name: row.name, type: row.type, server: row.server, port: row.port, raw: safeJson(row.raw), uri: row.uri || '',
         latency: row.latency, alive: row.alive, alive_ms: row.alive_ms }));
 
     // per-airport processing already applied at import time is stored in nodes,

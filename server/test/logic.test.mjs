@@ -77,6 +77,16 @@ ok(onlyAny.length === 1 && onlyAny[0].type === 'anytls', 'protocols keeps only a
 // --- converters ---
 const nodes = parseSubscription(blob);
 ok(Buffer.from(toBase64(nodes), 'base64').toString().includes('vmess://'), 'toBase64 round-trips');
+const modernVless = 'vless://11111111-2222-3333-4444-555555555555@modern.example.com:443?type=grpc&serviceName=grpc-service&security=reality&sni=cdn.example.com&pbk=public-key&sid=abcd&fp=chrome&encryption=none&packetEncoding=xudp#old-name';
+const modernNode = parseUri(modernVless);
+modernNode.name = 'renamed-node';
+modernNode.uri = modernVless;
+const relayedModern = Buffer.from(toBase64([modernNode]), 'base64').toString();
+ok(relayedModern.includes('serviceName=grpc-service') && relayedModern.includes('packetEncoding=xudp') && relayedModern.endsWith('#renamed-node'), 'toBase64 preserves unmodelled source URI parameters');
+const modernSb = JSON.parse(toSingbox([modernNode])).outbounds.find((o) => o.type === 'vless');
+ok(modernSb.transport?.type === 'grpc' && modernSb.transport?.service_name === 'grpc-service' && modernSb.tls?.reality?.enabled && modernSb.tls?.utls?.fingerprint === 'chrome', 'singbox probe retains gRPC/Reality/uTLS settings');
+const modernClash = yamlLoad(toClash([modernNode]));
+ok(modernClash.proxies[0]['grpc-opts']?.['grpc-service-name'] === 'grpc-service' && modernClash.proxies[0]['reality-opts']?.['public-key'] === 'public-key', 'Clash output retains gRPC/Reality settings');
 ok(toClash(nodes).includes('type: vmess'), 'toClash has proxies');
 ok(JSON.parse(toSingbox(nodes)).outbounds.some((o) => o.type === 'vmess'), 'toSingbox valid json');
 ok(toSurge(nodes).includes('[Proxy]'), 'toSurge');
